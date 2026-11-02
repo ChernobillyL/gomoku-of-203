@@ -22,6 +22,11 @@ struct Move {
     }
 };
 
+struct MoveRecord {
+    Move move;
+    Stone stone = Stone::Empty;
+};
+
 Stone opponent(Stone stone);
 
 class Board {
@@ -50,12 +55,14 @@ public:
     const Board& board() const { return board_; }
     Stone currentPlayer() const { return currentPlayer_; }
     Result result() const { return result_; }
+    const std::vector<MoveRecord>& moveHistory() const { return moveHistory_; }
     bool play(Move move);
 
 private:
     Board board_;
     Stone currentPlayer_ = Stone::Black;
     Result result_ = Result::Ongoing;
+    std::vector<MoveRecord> moveHistory_;
 };
 
 class AiPlayer {

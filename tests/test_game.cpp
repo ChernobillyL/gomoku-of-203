@@ -82,6 +82,13 @@ void testGameTurns() {
     check(game.currentPlayer() == gomoku::Stone::Black, "非法落子后不切换回合");
     check(game.play({7, 7}), "黑棋合法落子");
     check(game.currentPlayer() == gomoku::Stone::White, "合法落子后切换回合");
+    check(game.moveHistory().size() == 1, "成功落子写入一条记谱");
+    check(game.moveHistory().front().stone == gomoku::Stone::Black &&
+              game.moveHistory().front().move == gomoku::Move{7, 7}, "记谱保存棋手和坐标");
+    check(!game.play({7, 7}) && game.moveHistory().size() == 1, "重复落子不写入记谱");
+    check(game.play({7, 8}), "白棋合法落子");
+    check(game.moveHistory().size() == 2 && game.moveHistory()[1].stone == gomoku::Stone::White &&
+              game.moveHistory()[1].move == gomoku::Move{7, 8}, "记谱按黑白落子顺序追加");
 }
 
 void testGameWinStopsFurtherMoves() {
@@ -93,7 +100,9 @@ void testGameWinStopsFurtherMoves() {
     }
     check(game.result() == gomoku::Result::BlackWins, "Game 正确记录黑棋获胜");
     check(game.currentPlayer() == gomoku::Stone::Black, "对局结束后不再切换当前棋手");
+    check(game.moveHistory().size() == 9, "每次成功落子都进入记谱");
     check(!game.play({8, 8}), "对局结束后拒绝继续落子");
+    check(game.moveHistory().size() == 9, "终局后拒绝的落子不会进入记谱");
 }
 
 void testAiWinsAndBlocks() {

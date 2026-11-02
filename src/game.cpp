@@ -113,6 +113,7 @@ std::vector<Move> Board::emptyMoves() const {
 
 bool Game::play(Move move) {
     if (result_ != Result::Ongoing || !board_.place(move, currentPlayer_)) return false;
+    moveHistory_.push_back({move, currentPlayer_});
     result_ = board_.resultAfter(move);
     if (result_ == Result::Ongoing) currentPlayer_ = opponent(currentPlayer_);
     return true;
