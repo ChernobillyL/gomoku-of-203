@@ -1,0 +1,23 @@
+# CMake and compiler outputs
+/build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+build.ninja
+.ninja_*
+*.obj
+*.o
+*.a
+*.lib
+*.pdb
+
+# Local IDE settings
+/.idea/
+/.vscode/
+
+# Temporary/debug binaries (the deliverable 五子棋.exe is intentionally tracked)
+/gomoku.exe
+/gomoku_tests.exe
+/gomoku_tests_debug.exe
+/gomoku_verified.exe
