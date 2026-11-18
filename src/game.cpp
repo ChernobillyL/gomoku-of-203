@@ -61,8 +61,8 @@ long long scoreWindow(const Board& board, Move start, Move direction, Stone ston
 
 long long evaluateBoard(const Board& board, Stone perspective) {
     long long score = 0;
-    for (int row = 0; row < kBoardSize; ++row) {
-        for (int col = 0; col < kBoardSize; ++col) {
+    for (int row = 0; row < board.size(); ++row) {
+        for (int col = 0; col < board.size(); ++col) {
             for (const Move direction : kDirections) {
                 const Move end{row + 4 * direction.row, col + 4 * direction.col};
                 if (!board.inBounds(end)) continue;
@@ -90,7 +90,7 @@ long long evaluateMove(const Board& board, Move move, Stone stone) {
             }
         }
     }
-    const int center = kBoardSize / 2;
+    const int center = board.size() / 2;
     score -= static_cast<long long>(std::abs(move.row - center) + std::abs(move.col - center));
     return score;
 }
@@ -147,16 +147,16 @@ Stone opponent(Stone stone) {
     return stone == Stone::Black ? Stone::White : Stone::Black;
 }
 
-Board::Board() {
+Board::Board(int size) : size_(size >= 1 && size <= kMaxBoardSize ? size : kBoardSize) {
     cells_.fill(Stone::Empty);
 }
 
 bool Board::inBounds(Move move) const {
-    return move.row >= 0 && move.row < kBoardSize && move.col >= 0 && move.col < kBoardSize;
+    return move.row >= 0 && move.row < size_ && move.col >= 0 && move.col < size_;
 }
 
 std::size_t Board::index(Move move) const {
-    return static_cast<std::size_t>(move.row * kBoardSize + move.col);
+    return static_cast<std::size_t>(move.row * size_ + move.col);
 }
 
 bool Board::isEmpty(Move move) const {
@@ -176,7 +176,7 @@ bool Board::place(Move move, Stone stone) {
 }
 
 bool Board::isFull() const {
-    return moveCount_ == kBoardSize * kBoardSize;
+    return moveCount_ == size_ * size_;
 }
 
 Result Board::resultAfter(Move lastMove) const {
@@ -193,9 +193,9 @@ Result Board::resultAfter(Move lastMove) const {
 
 std::vector<Move> Board::emptyMoves() const {
     std::vector<Move> moves;
-    moves.reserve(static_cast<std::size_t>(kBoardSize * kBoardSize - moveCount_));
-    for (int row = 0; row < kBoardSize; ++row) {
-        for (int col = 0; col < kBoardSize; ++col) {
+    moves.reserve(static_cast<std::size_t>(size_ * size_ - moveCount_));
+    for (int row = 0; row < size_; ++row) {
+        for (int col = 0; col < size_; ++col) {
             Move move{row, col};
             if (isEmpty(move)) moves.push_back(move);
         }
@@ -214,19 +214,19 @@ bool Game::play(Move move) {
 std::vector<Move> AiPlayer::candidates(const Board& board) {
     std::vector<Move> moves;
     if (board.moveCount() == 0) {
-        return {{kBoardSize / 2, kBoardSize / 2}};
+        return {{board.size() / 2, board.size() / 2}};
     }
 
-    std::array<bool, kBoardSize * kBoardSize> seen{};
-    for (int row = 0; row < kBoardSize; ++row) {
-        for (int col = 0; col < kBoardSize; ++col) {
+    std::array<bool, kMaxBoardSize * kMaxBoardSize> seen{};
+    for (int row = 0; row < board.size(); ++row) {
+        for (int col = 0; col < board.size(); ++col) {
             const Move occupied{row, col};
             if (board.at(occupied) == Stone::Empty) continue;
             for (int dr = -2; dr <= 2; ++dr) {
                 for (int dc = -2; dc <= 2; ++dc) {
                     const Move candidate{row + dr, col + dc};
                     if (board.isEmpty(candidate)) {
-                        const std::size_t idx = static_cast<std::size_t>(candidate.row * kBoardSize + candidate.col);
+                        const std::size_t idx = static_cast<std::size_t>(candidate.row * board.size() + candidate.col);
                         if (!seen[idx]) {
                             seen[idx] = true;
                             moves.push_back(candidate);

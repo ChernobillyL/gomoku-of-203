@@ -9,6 +9,8 @@
 #include "gomoku/game.hpp"
 #include "gomoku/three_player.hpp"
 #include "gomoku/three_player_ai.hpp"
+#include "gomoku/six_player.hpp"
+#include "gomoku/six_player_ai.hpp"
 
 #include <algorithm>
 #include <array>
@@ -54,13 +56,15 @@ struct Rect {
 };
 
 enum class Screen { Menu, Playing, Finished };
-enum class ButtonAction { None, PvP, PvC, ThreePlayer, ThreePlayerAi, Undo, Restart, MainMenu, Exit };
+enum class ButtonAction { None, PvP, PvC, ThreePlayer, ThreePlayerAi, SixPlayer, SixPlayerAi, Undo, Restart, MainMenu, Exit };
 
 struct UndoSnapshot {
     Game game;
     ThreePlayerGame threeGame;
+    gomoku::SixPlayerGame sixGame;
     bool threePlayer = false;
     bool threePlayerAi = false;
+    bool sixPlayer = false;
     std::optional<Move> lastMove;
     int notationScroll = 0;
     std::wstring status;
@@ -73,10 +77,11 @@ struct Layout {
     Rect sidePanel{};
     Rect notationList{};
     std::array<Rect, 4> buttons{};
-    std::array<Rect, 4> menuButtons{};
+    std::array<Rect, 6> menuButtons{};
     Rect menuExit{};
     Rect menuPanel{};
     UINT dpi = 96;
+    int boardSize = gomoku::kBoardSize;
 };
 
 struct AppState {
@@ -84,25 +89,34 @@ struct AppState {
     bool pvc = false;
     bool threePlayer = false;
     bool threePlayerAi = false;
+    bool sixPlayer = false;
     UINT dpi = 96;
     Game game;
     ThreePlayerGame threeGame;
+    gomoku::SixPlayerGame sixGame;
     gomoku::AiPlayer ai;
     ThreePlayerAi threeAi;
+    gomoku::SixPlayerAi sixAi;
     std::optional<Move> lastMove;
     std::vector<UndoSnapshot> undoHistory;
     int notationScroll = 0;
     std::wstring status = L"选择一种模式，开始一局五子棋。";
     ButtonAction hovered = ButtonAction::None;
 
-    const Board& board() const { return threePlayer ? threeGame.board() : game.board(); }
-    Stone currentPlayer() const { return threePlayer ? threeGame.currentPlayer() : game.currentPlayer(); }
+    const Board& board() const {
+        return sixPlayer ? sixGame.board() : (threePlayer ? threeGame.board() : game.board());
+    }
+    Stone currentPlayer() const {
+        return sixPlayer ? sixGame.currentPlayer() : (threePlayer ? threeGame.currentPlayer() : game.currentPlayer());
+    }
     const std::vector<gomoku::MoveRecord>& moveHistory() const {
-        return threePlayer ? threeGame.moveHistory() : game.moveHistory();
+        return sixPlayer ? sixGame.moveHistory() : (threePlayer ? threeGame.moveHistory() : game.moveHistory());
     }
     bool finished() const {
-        return threePlayer ? threeGame.finished() : game.result() != Result::Ongoing;
+        return sixPlayer ? sixGame.finished() :
+               (threePlayer ? threeGame.finished() : game.result() != Result::Ongoing);
     }
+    int boardSize() const { return sixPlayer ? gomoku::kSixPlayerBoardSize : gomoku::kBoardSize; }
 };
 
 int px(int logicalSize, UINT dpi) {
@@ -117,8 +131,8 @@ Rect scaledRect(int left, int top, int width, int height, UINT dpi) {
     return makeRect(px(left, dpi), px(top, dpi), px(width, dpi), px(height, dpi));
 }
 
-int gridPixel(int origin, int index, int extent) {
-    return origin + MulDiv(index, extent, gomoku::kBoardSize - 1);
+int gridPixel(int origin, int index, int extent, int boardSize) {
+    return origin + MulDiv(index, extent, boardSize - 1);
 }
 
 void fillRect(HDC dc, Rect rect, COLORREF color) {
@@ -189,20 +203,21 @@ void drawButton(HDC dc, Rect rect, const std::wstring& label, ButtonAction actio
     drawCenteredText(dc, label, rect, 19, textColor, dpi, FW_SEMIBOLD);
 }
 
-Layout calculateLayout(int width, int height, UINT dpi) {
+Layout calculateLayout(int width, int height, UINT dpi, int boardSize = gomoku::kBoardSize) {
     Layout layout;
     layout.dpi = dpi;
+    layout.boardSize = boardSize;
     const int buttonWidth = std::min(px(330, dpi), std::max(px(240, dpi), width / 3));
     const int buttonHeight = px(50, dpi);
     const int menuLeft = width / 2 - buttonWidth / 2;
-    const int menuTop = height / 2 - px(68, dpi);
-    const int menuPitch = px(61, dpi);
-    for (int i = 0; i < 4; ++i) {
+    const int menuTop = height / 2 - px(200, dpi);
+    const int menuPitch = px(58, dpi);
+    for (int i = 0; i < 6; ++i) {
         layout.menuButtons[static_cast<std::size_t>(i)] =
             makeRect(menuLeft, menuTop + i * menuPitch, buttonWidth, buttonHeight);
     }
-    layout.menuExit = makeRect(menuLeft, menuTop + 4 * menuPitch, buttonWidth, buttonHeight);
-    const int menuPanelTop = height / 2 - px(76, dpi);
+    layout.menuExit = makeRect(menuLeft, menuTop + 6 * menuPitch, buttonWidth, buttonHeight);
+    const int menuPanelTop = menuTop - px(18, dpi);
     const int menuPanelBottom = layout.menuExit.bottom + px(18, dpi);
     layout.menuPanel = makeRect(width / 2 - px(260, dpi), menuPanelTop, px(520, dpi),
                                 menuPanelBottom - menuPanelTop);
@@ -243,20 +258,22 @@ void drawMenu(HDC dc, int width, int height, const AppState& app, const Layout& 
     const UINT dpi = layout.dpi;
     drawBackground(dc, width, height, dpi);
     // Center menu headings relative to the window in physical pixels.
-    drawCenteredText(dc, L"GOMOKU", makeRect(0, height / 2 - px(220, dpi), width, px(58, dpi)),
+    drawCenteredText(dc, L"GOMOKU", makeRect(0, height / 2 - px(350, dpi), width, px(58, dpi)),
                      42, kText, dpi, FW_BOLD);
-    drawCenteredText(dc, L"五子棋", makeRect(0, height / 2 - px(160, dpi), width, px(42, dpi)),
+    drawCenteredText(dc, L"五子棋", makeRect(0, height / 2 - px(290, dpi), width, px(42, dpi)),
                      25, kAccent, dpi, FW_SEMIBOLD);
     drawCenteredText(dc, L"经典棋局 · 与朋友或电脑对弈",
-                     makeRect(0, height / 2 - px(112, dpi), width, px(36, dpi)), 16, kMuted, dpi);
+                     makeRect(0, height / 2 - px(245, dpi), width, px(36, dpi)), 16, kMuted, dpi);
 
     drawRoundRect(dc, layout.menuPanel, kPanel, RGB(50, 66, 91), 22, dpi);
-    drawButton(dc, layout.menuButtons[0], L"双人对战  ·  PvP", ButtonAction::PvP, app.hovered, dpi, true);
-    drawButton(dc, layout.menuButtons[1], L"人机对战  ·  PvC", ButtonAction::PvC, app.hovered, dpi);
-    drawButton(dc, layout.menuButtons[2], L"三人四子棋  ·  同屏", ButtonAction::ThreePlayer, app.hovered, dpi);
-    drawButton(dc, layout.menuButtons[3], L"三人四子棋  ·  人机", ButtonAction::ThreePlayerAi, app.hovered, dpi);
+    drawButton(dc, layout.menuButtons[0], L"五子棋  ·  PvP", ButtonAction::PvP, app.hovered, dpi, true);
+    drawButton(dc, layout.menuButtons[1], L"五子棋  ·  PvC", ButtonAction::PvC, app.hovered, dpi);
+    drawButton(dc, layout.menuButtons[2], L"三人四子棋  ·  PvP", ButtonAction::ThreePlayer, app.hovered, dpi);
+    drawButton(dc, layout.menuButtons[3], L"三人四子棋  ·  PvC", ButtonAction::ThreePlayerAi, app.hovered, dpi);
+    drawButton(dc, layout.menuButtons[4], L"六子棋  ·  PvP", ButtonAction::SixPlayer, app.hovered, dpi);
+    drawButton(dc, layout.menuButtons[5], L"六子棋  ·  PvC", ButtonAction::SixPlayerAi, app.hovered, dpi);
     drawButton(dc, layout.menuExit, L"退出游戏", ButtonAction::Exit, app.hovered, dpi, false, true);
-    drawCenteredText(dc, L"15 × 15 棋盘    黑棋先手    四种模式",
+    drawCenteredText(dc, L"五子棋 / 三人四子棋：15 路    六子棋：19 路",
                      makeRect(0, height - px(52, dpi), width, px(26, dpi)), 14, kMuted, dpi);
 }
 
@@ -281,7 +298,7 @@ const wchar_t* threePlayerLabel(Stone stone) {
 }
 
 std::wstring playerText(const AppState& app) {
-    if (app.threePlayer) {
+    if (app.threePlayer && !app.sixPlayer) {
         if (app.screen == Screen::Finished) {
             const auto winner = app.threeGame.winner();
             if (!winner) return L"平局，再来一局？";
@@ -305,6 +322,12 @@ std::wstring playerText(const AppState& app) {
         }
         return std::wstring(L"轮到") + threePlayerLabel(app.threeGame.currentPlayer());
     }
+    if (app.screen == Screen::Finished && app.sixPlayer) {
+        const auto winner = app.sixGame.winner();
+        if (!winner) return L"平局，再来一局？";
+        if (app.pvc) return *winner == Stone::Black ? L"你赢了！" : L"电脑获胜！";
+        return *winner == Stone::Black ? L"黑方获胜！" : L"白方获胜！";
+    }
     if (app.screen == Screen::Finished) {
         switch (app.game.result()) {
             case Result::BlackWins: return app.pvc ? L"你赢了！" : L"黑棋获胜！";
@@ -313,19 +336,31 @@ std::wstring playerText(const AppState& app) {
             case Result::Ongoing: break;
         }
     }
+    if (app.sixPlayer) {
+        const Stone turn = app.sixGame.currentPlayer();
+        const std::wstring remaining = L"，本回合还需落 " +
+                                      std::to_wstring(app.sixGame.movesRemaining()) + L" 子";
+        if (app.pvc) return (turn == Stone::Black ? L"轮到你（黑方）" : L"电脑思考中（白方）") + remaining;
+        return (turn == Stone::Black ? L"轮到黑方" : L"轮到白方") + remaining;
+    }
     if (app.pvc) return app.game.currentPlayer() == Stone::Black ? L"轮到你（黑棋）" : L"电脑思考中（白棋）";
     return app.game.currentPlayer() == Stone::Black ? L"轮到黑棋" : L"轮到白棋";
 }
 
 void drawHeader(HDC dc, int width, const AppState& app) {
     const UINT dpi = app.dpi;
-    drawText(dc, L"五子棋", scaledRect(28, 22, 180, 48, dpi), 27, kText, dpi, DT_LEFT, FW_BOLD);
-    std::wstring modeTitle = app.pvc ? L"人机对战  /  PvC" : L"双人对战  /  PvP";
-    if (app.threePlayer) modeTitle = app.threePlayerAi ? L"三人四子棋  /  人机" : L"三人四子棋  /  同屏";
+    drawText(dc, app.sixPlayer ? L"六子棋" : L"五子棋", scaledRect(28, 22, 180, 48, dpi), 27, kText, dpi, DT_LEFT, FW_BOLD);
+    std::wstring modeTitle = app.pvc ? L"五子棋  /  PvC" : L"五子棋  /  PvP";
+    if (app.threePlayer && !app.sixPlayer) modeTitle = app.threePlayerAi ? L"三人四子棋  /  PvC" : L"三人四子棋  /  PvP";
+    if (app.sixPlayer) modeTitle = app.pvc ? L"六子棋  /  PvC" : L"六子棋  /  PvP";
     drawText(dc, modeTitle, scaledRect(210, 24, 250, 44, dpi), 16, kMuted, dpi);
     if (app.threePlayer && !app.threePlayerAi) {
-        drawText(dc, L"同屏规则：他人已有死三/活三时，本手不可再成活三",
+        drawText(dc, L"附加规则：他人已有死三/活三时，本手不可再成活三",
                  scaledRect(210, 70, 620, 24, dpi), 11, kMuted, dpi);
+    } else if (app.sixPlayer) {
+        drawText(dc, app.sixGame.board().moveCount() == 0 ? L"黑方开局先下一子；之后双方每回合各下两子，连六获胜。"
+                                                        : L"每回合连续落两子；落下第一子后仍由同一方落第二子。",
+                 scaledRect(210, 70, 700, 24, dpi), 11, kMuted, dpi);
     }
     drawText(dc, L"ESC  返回菜单", makeRect(width - px(210, dpi), px(24, dpi), px(182, dpi), px(42, dpi)),
              14, kMuted, dpi, DT_RIGHT);
@@ -368,7 +403,7 @@ void drawStone(HDC dc, int x, int y, int radius, Stone stone, bool isLast, UINT 
 void drawBoard(HDC dc, const AppState& app, const Layout& layout) {
     const UINT dpi = layout.dpi;
     drawRoundRect(dc, layout.boardCard, kBoardWood, RGB(160, 119, 70), 18, dpi);
-    const int spacing = layout.boardGrid.width() / (gomoku::kBoardSize - 1);
+    const int spacing = layout.boardGrid.width() / (layout.boardSize - 1);
     const int radius = std::max(px(4, dpi), static_cast<int>(spacing * 0.38));
     const int left = layout.boardGrid.left;
     const int top = layout.boardGrid.top;
@@ -377,9 +412,9 @@ void drawBoard(HDC dc, const AppState& app, const Layout& layout) {
 
     HPEN gridPen = CreatePen(PS_SOLID, std::max(1, px(1, dpi)), kGrid);
     const HGDIOBJ oldPen = SelectObject(dc, gridPen);
-    for (int i = 0; i < gomoku::kBoardSize; ++i) {
-        const int x = gridPixel(left, i, layout.boardGrid.width());
-        const int y = gridPixel(top, i, layout.boardGrid.height());
+    for (int i = 0; i < layout.boardSize; ++i) {
+        const int x = gridPixel(left, i, layout.boardGrid.width(), layout.boardSize);
+        const int y = gridPixel(top, i, layout.boardGrid.height(), layout.boardSize);
         MoveToEx(dc, left, y, nullptr);
         LineTo(dc, right + 1, y);
         MoveToEx(dc, x, top, nullptr);
@@ -397,27 +432,29 @@ void drawBoard(HDC dc, const AppState& app, const Layout& layout) {
     SelectObject(dc, oldPen);
     DeleteObject(gridPen);
 
-    const std::array<int, 3> starPoints{{3, 7, 11}};
+    const std::array<int, 3> starPoints = layout.boardSize == 19
+        ? std::array<int, 3>{{3, 9, 15}}
+        : std::array<int, 3>{{3, 7, 11}};
     HBRUSH starBrush = CreateSolidBrush(kGrid);
     const HGDIOBJ oldBrush = SelectObject(dc, starBrush);
     const int starRadius = std::max(2, px(3, dpi));
     for (const int row : starPoints) {
         for (const int col : starPoints) {
-            const int x = gridPixel(left, col, layout.boardGrid.width());
-            const int y = gridPixel(top, row, layout.boardGrid.height());
+            const int x = gridPixel(left, col, layout.boardGrid.width(), layout.boardSize);
+            const int y = gridPixel(top, row, layout.boardGrid.height(), layout.boardSize);
             Ellipse(dc, x - starRadius, y - starRadius, x + starRadius + 1, y + starRadius + 1);
         }
     }
     SelectObject(dc, oldBrush);
     DeleteObject(starBrush);
 
-    for (int row = 0; row < gomoku::kBoardSize; ++row) {
-        for (int col = 0; col < gomoku::kBoardSize; ++col) {
+    for (int row = 0; row < layout.boardSize; ++row) {
+        for (int col = 0; col < layout.boardSize; ++col) {
             const Move move{row, col};
             const Stone stone = app.board().at(move);
             if (stone == Stone::Empty) continue;
-            const int x = gridPixel(left, col, layout.boardGrid.width());
-            const int y = gridPixel(top, row, layout.boardGrid.height());
+            const int x = gridPixel(left, col, layout.boardGrid.width(), layout.boardSize);
+            const int y = gridPixel(top, row, layout.boardGrid.height(), layout.boardSize);
             drawStone(dc, x, y, radius, stone, app.lastMove && *app.lastMove == move, dpi);
         }
     }
@@ -519,7 +556,7 @@ void paintWindow(HWND window, AppState& app) {
         return;
     }
 
-    const Layout layout = calculateLayout(width, height, app.dpi);
+    const Layout layout = calculateLayout(width, height, app.dpi, app.boardSize());
     HDC memoryDc = CreateCompatibleDC(targetDc);
     HBITMAP bitmap = memoryDc != nullptr ? CreateCompatibleBitmap(targetDc, width, height) : nullptr;
     if (memoryDc == nullptr || bitmap == nullptr) {
@@ -556,10 +593,12 @@ void paintWindow(HWND window, AppState& app) {
 void startGame(AppState& app, bool pvc) {
     app.screen = Screen::Playing;
     app.pvc = pvc;
+    app.sixPlayer = false;
     app.threePlayer = false;
     app.threePlayerAi = false;
     app.game = Game{};
     app.threeGame = ThreePlayerGame{};
+    app.sixGame = gomoku::SixPlayerGame{};
     app.lastMove.reset();
     app.undoHistory.clear();
     app.notationScroll = 0;
@@ -569,10 +608,12 @@ void startGame(AppState& app, bool pvc) {
 void startThreePlayerGame(AppState& app, bool threePlayerAi) {
     app.screen = Screen::Playing;
     app.pvc = false;
+    app.sixPlayer = false;
     app.threePlayer = true;
     app.threePlayerAi = threePlayerAi;
     app.game = Game{};
     app.threeGame = ThreePlayerGame(!threePlayerAi);
+    app.sixGame = gomoku::SixPlayerGame{};
     app.lastMove.reset();
     app.undoHistory.clear();
     app.notationScroll = 0;
@@ -580,11 +621,29 @@ void startThreePlayerGame(AppState& app, bool threePlayerAi) {
                                : L"玩家1执黑先手，三人轮流落子。";
 }
 
+void startSixPlayerGame(AppState& app, bool pvc) {
+    app.screen = Screen::Playing;
+    app.pvc = pvc;
+    app.threePlayer = false;
+    app.threePlayerAi = false;
+    app.sixPlayer = true;
+    app.game = Game{};
+    app.threeGame = ThreePlayerGame{};
+    app.sixGame = gomoku::SixPlayerGame{};
+    app.lastMove.reset();
+    app.undoHistory.clear();
+    app.notationScroll = 0;
+    app.status = pvc ? L"黑方先下一子；之后双方每回合各下两子。"
+                     : L"黑方开局先下一子；之后双方每回合各下两子。";
+}
+
 void saveUndoSnapshot(AppState& app) {
     UndoSnapshot snapshot;
     snapshot.game = app.game;
     snapshot.threeGame = app.threeGame;
+    snapshot.sixGame = app.sixGame;
     snapshot.threePlayer = app.threePlayer;
+    snapshot.sixPlayer = app.sixPlayer;
     snapshot.threePlayerAi = app.threePlayerAi;
     snapshot.lastMove = app.lastMove;
     snapshot.notationScroll = app.notationScroll;
@@ -599,7 +658,9 @@ bool undoLastTurn(AppState& app) {
     app.undoHistory.pop_back();
     app.game = std::move(snapshot.game);
     app.threeGame = std::move(snapshot.threeGame);
+    app.sixGame = std::move(snapshot.sixGame);
     app.threePlayer = snapshot.threePlayer;
+    app.sixPlayer = snapshot.sixPlayer;
     app.threePlayerAi = snapshot.threePlayerAi;
     app.lastMove = snapshot.lastMove;
     app.notationScroll = snapshot.notationScroll;
@@ -615,6 +676,8 @@ Rect buttonRect(ButtonAction action, const AppState& app, const Layout& layout) 
             case ButtonAction::PvC: return layout.menuButtons[1];
             case ButtonAction::ThreePlayer: return layout.menuButtons[2];
             case ButtonAction::ThreePlayerAi: return layout.menuButtons[3];
+            case ButtonAction::SixPlayer: return layout.menuButtons[4];
+            case ButtonAction::SixPlayerAi: return layout.menuButtons[5];
             case ButtonAction::Exit: return layout.menuExit;
             default: return {};
         }
@@ -645,6 +708,8 @@ ButtonAction hitTest(const POINT point, const AppState& app, const Layout& layou
         if (layout.menuButtons[1].contains(point)) return ButtonAction::PvC;
         if (layout.menuButtons[2].contains(point)) return ButtonAction::ThreePlayer;
         if (layout.menuButtons[3].contains(point)) return ButtonAction::ThreePlayerAi;
+        if (layout.menuButtons[4].contains(point)) return ButtonAction::SixPlayer;
+        if (layout.menuButtons[5].contains(point)) return ButtonAction::SixPlayerAi;
         if (layout.menuExit.contains(point)) return ButtonAction::Exit;
         return ButtonAction::None;
     }
@@ -662,31 +727,32 @@ ButtonAction hitTest(const POINT point, const AppState& app, const Layout& layou
     return ButtonAction::None;
 }
 
-int nearestGridIndex(int coordinate, int origin, int extent) {
+int nearestGridIndex(int coordinate, int origin, int extent, int boardSize) {
     int bestIndex = 0;
     int bestDistance = (std::numeric_limits<int>::max)();
-    for (int index = 0; index < gomoku::kBoardSize; ++index) {
-        const int distance = std::abs(coordinate - gridPixel(origin, index, extent));
+    for (int index = 0; index < boardSize; ++index) {
+        const int distance = std::abs(coordinate - gridPixel(origin, index, extent, boardSize));
         if (distance < bestDistance) {
             bestDistance = distance;
             bestIndex = index;
         }
     }
-    return bestDistance <= extent / (gomoku::kBoardSize - 1) / 2 ? bestIndex : -1;
+    return bestDistance <= extent / (boardSize - 1) / 2 ? bestIndex : -1;
 }
 
 void scrollNotationToLatest(HWND window, AppState& app) {
     RECT client{};
     GetClientRect(window, &client);
-    const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top, app.dpi);
+    const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top,
+                                          app.dpi, app.boardSize());
     const int visibleLines = notationVisibleLines(layout);
     app.notationScroll = std::max(0, static_cast<int>(app.moveHistory().size()) - visibleLines);
 }
 
 bool placeThreePlayerMove(HWND window, AppState& app, const Layout& layout, POINT point) {
     if (app.threePlayerAi && app.threeGame.currentPlayer() != Stone::Black) return false;
-    const int col = nearestGridIndex(point.x, layout.boardGrid.left, layout.boardGrid.width());
-    const int row = nearestGridIndex(point.y, layout.boardGrid.top, layout.boardGrid.height());
+    const int col = nearestGridIndex(point.x, layout.boardGrid.left, layout.boardGrid.width(), app.boardSize());
+    const int row = nearestGridIndex(point.y, layout.boardGrid.top, layout.boardGrid.height(), app.boardSize());
     if (row < 0 || col < 0) return false;
     const Move move{row, col};
     if (!app.threeGame.board().isEmpty(move)) {
@@ -732,12 +798,57 @@ bool placeThreePlayerMove(HWND window, AppState& app, const Layout& layout, POIN
     return true;
 }
 
+bool placeSixPlayerMove(HWND window, AppState& app, const Layout& layout, POINT point) {
+    if (app.pvc && app.sixGame.currentPlayer() != Stone::Black) return false;
+    const int col = nearestGridIndex(point.x, layout.boardGrid.left, layout.boardGrid.width(), app.boardSize());
+    const int row = nearestGridIndex(point.y, layout.boardGrid.top, layout.boardGrid.height(), app.boardSize());
+    if (row < 0 || col < 0) return false;
+    const Move move{row, col};
+    if (!app.sixGame.board().isEmpty(move)) {
+        app.status = L"这个交叉点已有棋子，请选择空位。";
+        invalidateRect(window, layout.sidePanel);
+        return true;
+    }
+    // PvC 的悔棋回到玩家本回合开始处：双子回合的第二子不另存快照。
+    const bool saveSnapshot = !app.pvc || app.sixGame.movesRemaining() != 1 ||
+                              app.sixGame.board().moveCount() == 0;
+    if (saveSnapshot) saveUndoSnapshot(app);
+    if (!app.sixGame.play(move)) {
+        if (saveSnapshot) app.undoHistory.pop_back();
+        return true;
+    }
+    app.lastMove = move;
+    if (app.pvc && !app.sixGame.finished() && app.sixGame.currentPlayer() == Stone::White) {
+        const int aiMoves = app.sixGame.movesRemaining();
+        for (int i = 0; i < aiMoves && !app.sixGame.finished(); ++i) {
+            const auto aiMove = app.sixAi.chooseMove(app.sixGame.board(), Stone::White,
+                                                      app.sixGame.movesRemaining());
+            if (!aiMove || !app.sixGame.play(*aiMove)) {
+                app.status = L"电脑未能生成合法落子。";
+                break;
+            }
+            app.lastMove = *aiMove;
+        }
+    }
+    scrollNotationToLatest(window, app);
+    if (app.sixGame.finished()) {
+        app.screen = Screen::Finished;
+        app.status = app.sixGame.winner() ? L"对局结束。" : L"棋盘下满，平局。";
+    } else {
+        app.status = app.pvc ? L"电脑已完成本回合，轮到你了。" : L"落子成功。";
+    }
+    invalidateRect(window, layout.boardCard);
+    invalidateRect(window, layout.sidePanel);
+    return true;
+}
+
 bool placeHumanMove(HWND window, AppState& app, const Layout& layout, POINT point) {
     if (app.screen != Screen::Playing) return false;
+    if (app.sixPlayer) return placeSixPlayerMove(window, app, layout, point);
     if (app.threePlayer) return placeThreePlayerMove(window, app, layout, point);
     if (app.pvc && app.currentPlayer() != Stone::Black) return false;
-    const int col = nearestGridIndex(point.x, layout.boardGrid.left, layout.boardGrid.width());
-    const int row = nearestGridIndex(point.y, layout.boardGrid.top, layout.boardGrid.height());
+    const int col = nearestGridIndex(point.x, layout.boardGrid.left, layout.boardGrid.width(), app.boardSize());
+    const int row = nearestGridIndex(point.y, layout.boardGrid.top, layout.boardGrid.height(), app.boardSize());
     if (row < 0 || col < 0) return false;
     const Move move{row, col};
     if (!app.board().isEmpty(move)) {
@@ -787,6 +898,12 @@ void performAction(HWND window, AppState& app, ButtonAction action, const Layout
         case ButtonAction::ThreePlayerAi:
             startThreePlayerGame(app, true);
             break;
+        case ButtonAction::SixPlayer:
+            startSixPlayerGame(app, false);
+            break;
+        case ButtonAction::SixPlayerAi:
+            startSixPlayerGame(app, true);
+            break;
         case ButtonAction::Undo: {
             if (!undoLastTurn(app)) {
                 app.status = L"当前没有可悔的棋。";
@@ -798,16 +915,19 @@ void performAction(HWND window, AppState& app, ButtonAction action, const Layout
             return;
         }
         case ButtonAction::Restart:
-            if (app.threePlayer) startThreePlayerGame(app, app.threePlayerAi);
+            if (app.sixPlayer) startSixPlayerGame(app, app.pvc);
+            else if (app.threePlayer) startThreePlayerGame(app, app.threePlayerAi);
             else startGame(app, app.pvc);
             break;
         case ButtonAction::MainMenu:
             app.screen = Screen::Menu;
             app.pvc = false;
+            app.sixPlayer = false;
             app.threePlayer = false;
             app.threePlayerAi = false;
             app.game = Game{};
             app.threeGame = ThreePlayerGame{};
+            app.sixGame = gomoku::SixPlayerGame{};
             app.lastMove.reset();
             app.undoHistory.clear();
             app.status = L"选择一种模式，开始一局五子棋。";
@@ -854,7 +974,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         case WM_MOUSEMOVE: {
             RECT client{};
             GetClientRect(window, &client);
-            const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top, app->dpi);
+            const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top, app->dpi, app->boardSize());
             const POINT point{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
             const ButtonAction hovered = hitTest(point, *app, layout);
             if (hovered != app->hovered) {
@@ -875,7 +995,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             app->hovered = ButtonAction::None;
             RECT client{};
             GetClientRect(window, &client);
-            const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top, app->dpi);
+            const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top, app->dpi, app->boardSize());
             invalidateButton(window, previous, *app, layout);
             return 0;
         }
@@ -884,7 +1004,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             ScreenToClient(window, &screenPoint);
             RECT client{};
             GetClientRect(window, &client);
-            const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top, app->dpi);
+            const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top, app->dpi, app->boardSize());
             if (app->screen != Screen::Menu && layout.notationList.contains(screenPoint)) {
                 const int visibleLines = notationVisibleLines(layout);
                 const int maxScroll = std::max(0, static_cast<int>(app->moveHistory().size()) - visibleLines);
@@ -901,7 +1021,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         case WM_LBUTTONUP: {
             RECT client{};
             GetClientRect(window, &client);
-            const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top, app->dpi);
+            const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top, app->dpi, app->boardSize());
             const POINT point{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
             const ButtonAction action = hitTest(point, *app, layout);
             if (action != ButtonAction::None) {
@@ -919,8 +1039,10 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     app->pvc = false;
                     app->threePlayer = false;
                     app->threePlayerAi = false;
+                    app->sixPlayer = false;
                     app->game = Game{};
                     app->threeGame = ThreePlayerGame{};
+                    app->sixGame = gomoku::SixPlayerGame{};
                     app->lastMove.reset();
                     app->undoHistory.clear();
                     app->status = L"已返回主菜单。选择模式开始新局。";

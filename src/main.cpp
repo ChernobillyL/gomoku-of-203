@@ -2,6 +2,8 @@
 #include "gomoku/input.hpp"
 #include "gomoku/three_player.hpp"
 #include "gomoku/three_player_ai.hpp"
+#include "gomoku/six_player.hpp"
+#include "gomoku/six_player_ai.hpp"
 
 #include <iostream>
 #include <string>
@@ -25,6 +27,8 @@ using gomoku::Result;
 using gomoku::Stone;
 using gomoku::ThreePlayerAi;
 using gomoku::ThreePlayerGame;
+using gomoku::SixPlayerGame;
+using gomoku::SixPlayerAi;
 
 enum class ReadStatus { Line, Escape, EndOfInput };
 struct ReadResult {
@@ -119,15 +123,15 @@ std::string stoneSymbol(Stone stone) {
 
 void drawBoard(const Board& board, bool threePlayer = false) {
     std::cout << "\n    ";
-    for (int col = 1; col <= gomoku::kBoardSize; ++col) {
+    for (int col = 1; col <= board.size(); ++col) {
         if (col < 10) std::cout << ' ';
         std::cout << col << ' ';
     }
     std::cout << '\n';
-    for (int row = 0; row < gomoku::kBoardSize; ++row) {
+    for (int row = 0; row < board.size(); ++row) {
         if (row + 1 < 10) std::cout << ' ';
         std::cout << row + 1 << "  ";
-        for (int col = 0; col < gomoku::kBoardSize; ++col) {
+        for (int col = 0; col < board.size(); ++col) {
             std::cout << stoneSymbol(board.at({row, col})) << "  ";
         }
         std::cout << '\n';
@@ -154,6 +158,11 @@ const char* threePlayerName(Stone stone) {
     return "玩家";
 }
 
+const char* sixPlayerName(Stone stone, bool pvc) {
+    if (stone == Stone::Black) return pvc ? "你（黑方）" : "黑方";
+    return pvc ? "电脑（白方）" : "白方";
+}
+
 const char* threePlayerAiName(Stone stone) {
     switch (stone) {
         case Stone::Black: return "你（黑棋）";
@@ -165,18 +174,18 @@ const char* threePlayerAiName(Stone stone) {
 }
 
 bool getHumanMove(const Board& board, Move& move) {
-    const std::string coordinateRange = "1-" + std::to_string(gomoku::kBoardSize);
+    const std::string coordinateRange = "1-" + std::to_string(board.size());
     const std::string prompt = "输入行 列（" + coordinateRange + "），如：8 8（按 Esc 退出）：";
     while (true) {
         const ReadResult input = readLine(prompt);
         if (input.status != ReadStatus::Line) return false;
-        const gomoku::MoveInputStatus status = gomoku::parseMoveInput(input.text, move);
+        const gomoku::MoveInputStatus status = gomoku::parseMoveInput(input.text, move, board.size());
         if (status == gomoku::MoveInputStatus::InvalidFormat) {
             std::cout << "输入格式错误，请输入两个整数，例如：8 8。\n";
             continue;
         }
-        if (status == gomoku::MoveInputStatus::OutOfRange) {
-            std::cout << "坐标越界，行和列必须在 1 到 15 之间。\n";
+        if (status == gomoku::MoveInputStatus::OutOfRange || !board.inBounds(move)) {
+            std::cout << "坐标越界，行和列必须在 1 到 " << board.size() << " 之间。\n";
             continue;
         }
         if (!board.isEmpty(move)) {
@@ -263,9 +272,54 @@ bool playGame(bool pvc) {
     return true;
 }
 
+bool playSixPlayerGame(bool pvc) {
+    SixPlayerGame game;
+    SixPlayerAi ai;
+    std::cout << "\n=== 六子棋 · " << (pvc ? "PvC" : "PvP") << " ===\n"
+              << "黑方先手只下一子；此后双方每回合各下两子，连成六子及以上获胜。\n";
+    drawBoard(game.board());
+
+    while (!game.finished()) {
+        const Stone turn = game.currentPlayer();
+        if (pvc && turn == Stone::White) {
+            const auto move = ai.chooseMove(game.board(), Stone::White, game.movesRemaining());
+            if (!move || !game.play(*move)) {
+                std::cerr << "AI 无法生成合法落子，游戏已安全结束。\n";
+                return false;
+            }
+            std::cout << "电脑落子：" << move->row + 1 << ' ' << move->col + 1 << '\n';
+        } else {
+            std::cout << "轮到：" << sixPlayerName(turn, pvc) << "，本回合还需落 "
+                      << game.movesRemaining() << " 子。\n";
+            Move move;
+            if (!getHumanMove(game.board(), move)) return false;
+            if (!game.play(move)) {
+                std::cout << "落子失败，请重试。\n";
+                continue;
+            }
+        }
+        drawBoard(game.board());
+    }
+
+    if (game.winner()) std::cout << sixPlayerName(*game.winner(), pvc) << "获胜！\n";
+    else std::cout << "棋盘下满，平局！\n";
+    return true;
+}
+
+int readMenuChoice(const std::string& prompt, int minimum, int maximum);
+
+bool runSixPlayerMode(bool pvc) {
+    while (true) {
+        if (!playSixPlayerGame(pvc)) return false;
+        const int choice = readMenuChoice("本局结束：1 重新开始  2 返回主菜单  3 退出（Esc 退出）：", 1, 3);
+        if (choice == 0 || choice == 3) return false;
+        if (choice == 2) return true;
+    }
+}
+
 bool playThreePlayerGame() {
     ThreePlayerGame game(true);
-    std::cout << "\n=== 三人四子棋（同屏） ===\n"
+    std::cout << "\n=== 三人四子棋 · PvP（同屏） ===\n"
               << "黑棋先手，三人轮流落子；横、竖、斜任意方向连成四子及以上获胜。\n"
               << "同屏规则：若其他玩家已有死三或活三，本手不能形成新的活三"
                  "（直接成四获胜的手除外）。\n";
@@ -294,7 +348,7 @@ bool playThreePlayerGame() {
 bool playThreePlayerAiGame() {
     ThreePlayerGame game;
     ThreePlayerAi ai;
-    std::cout << "\n=== 三人四子棋 · 人机对战 ===\n"
+    std::cout << "\n=== 三人四子棋 · PvC ===\n"
               << "你执黑先手，电脑1执白、电脑2执红；两台电脑各自为战。\n";
     drawBoard(game.board(), true);
 
@@ -372,19 +426,25 @@ int main() {
     std::cout << "欢迎来到五子棋！\n";
     while (true) {
         std::cout << "\n========== 主菜单 ==========\n"
-                  << "1：PvP 玩家对战\n"
-                  << "2：PvC 人机对战（玩家执黑先手）\n"
-                  << "3：三人四子棋（同屏，三人轮流）\n"
-                  << "4：三人四子棋（人机，1 人 + 2 电脑）\n"
-                  << "5：退出游戏\n";
-        const int choice = readMenuChoice("请选择（按 Esc 退出）：", 1, 5);
-        if (choice == 0 || choice == 5) break;
+                  << "1：五子棋 PvP\n"
+                  << "2：五子棋 PvC（玩家执黑先手）\n"
+                  << "3：三人四子棋 PvP（三人同屏）\n"
+                  << "4：三人四子棋 PvC（1 人 + 2 电脑）\n"
+                  << "5：六子棋 PvP\n"
+                  << "6：六子棋 PvC（玩家执黑先手）\n"
+                  << "7：退出游戏\n";
+        const int choice = readMenuChoice("请选择（按 Esc 退出）：", 1, 7);
+        if (choice == 0 || choice == 7) break;
         if (choice == 3) {
             if (!runThreePlayerMode()) break;
             continue;
         }
         if (choice == 4) {
             if (!runThreePlayerAiMode()) break;
+            continue;
+        }
+        if (choice == 5 || choice == 6) {
+            if (!runSixPlayerMode(choice == 6)) break;
             continue;
         }
         if (!runMode(choice == 2)) break;

@@ -27,7 +27,8 @@ inline bool parseMenuInput(const std::string& text, int& choice) {
     return true;
 }
 
-inline MoveInputStatus parseMoveInput(const std::string& text, Move& move) {
+inline MoveInputStatus parseMoveInput(const std::string& text, Move& move,
+                                      int boardSize = kBoardSize) {
     const char* cursor = text.data();
     const char* const end = cursor + text.size();
     const auto skipWhitespace = [&cursor, end]() {
@@ -52,7 +53,7 @@ inline MoveInputStatus parseMoveInput(const std::string& text, Move& move) {
     if (!parseNumber(col)) return MoveInputStatus::InvalidFormat;
     skipWhitespace();
     if (cursor != end) return MoveInputStatus::InvalidFormat;
-    if (row < 1 || row > kBoardSize || col < 1 || col > kBoardSize) {
+    if (row < 1 || row > boardSize || col < 1 || col > boardSize) {
         return MoveInputStatus::OutOfRange;
     }
     move = {row - 1, col - 1};

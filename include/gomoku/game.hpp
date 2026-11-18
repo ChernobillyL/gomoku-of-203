@@ -9,6 +9,7 @@
 namespace gomoku {
 
 constexpr int kBoardSize = 15;
+constexpr int kMaxBoardSize = 19;
 
 enum class Stone : char { Empty = '.', Black = 'X', White = 'O', Red = 'R' };
 enum class Result { Ongoing, BlackWins, WhiteWins, Draw };
@@ -31,8 +32,9 @@ Stone opponent(Stone stone);
 
 class Board {
 public:
-    Board();
+    explicit Board(int size = kBoardSize);
 
+    int size() const { return size_; }
     bool inBounds(Move move) const;
     bool isEmpty(Move move) const;
     Stone at(Move move) const;
@@ -43,7 +45,8 @@ public:
     std::vector<Move> emptyMoves() const;
 
 private:
-    std::array<Stone, kBoardSize * kBoardSize> cells_{};
+    std::array<Stone, kMaxBoardSize * kMaxBoardSize> cells_{};
+    int size_ = kBoardSize;
     int moveCount_ = 0;
     std::size_t index(Move move) const;
 };

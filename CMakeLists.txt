@@ -11,7 +11,13 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-add_library(gomoku_core src/game.cpp src/three_player.cpp src/three_player_ai.cpp)
+add_library(gomoku_core
+    src/game.cpp
+    src/three_player.cpp
+    src/three_player_ai.cpp
+    src/six_player.cpp
+    src/six_player_ai.cpp
+)
 target_include_directories(gomoku_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 if(MSVC)
@@ -61,8 +67,12 @@ target_link_libraries(gomoku_tests PRIVATE gomoku_core)
 add_executable(gomoku_three_player_tests tests/test_three_player.cpp)
 target_link_libraries(gomoku_three_player_tests PRIVATE gomoku_core)
 
+add_executable(gomoku_six_player_tests tests/test_six_player.cpp)
+target_link_libraries(gomoku_six_player_tests PRIVATE gomoku_core)
+
 include(CTest)
 if(BUILD_TESTING)
     add_test(NAME gomoku_core_tests COMMAND gomoku_tests)
     add_test(NAME gomoku_three_player_tests COMMAND gomoku_three_player_tests)
+    add_test(NAME gomoku_six_player_tests COMMAND gomoku_six_player_tests)
 endif()
