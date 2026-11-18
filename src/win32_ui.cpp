@@ -412,19 +412,54 @@ void drawGame(HDC dc, int width, int height, const AppState& app, const Layout& 
     drawSidePanel(dc, app, layout);
 }
 
+void paintScene(HDC dc, int width, int height, const AppState& app, const Layout& layout) {
+    if (app.screen == Screen::Menu) drawMenu(dc, width, height, app, layout);
+    else drawGame(dc, width, height, app, layout);
+}
+
 void paintWindow(HWND window, AppState& app) {
     PAINTSTRUCT paint{};
-    HDC dc = BeginPaint(window, &paint);
+    HDC targetDc = BeginPaint(window, &paint);
     RECT client{};
     GetClientRect(window, &client);
     const int width = client.right - client.left;
     const int height = client.bottom - client.top;
-    const Layout layout = calculateLayout(width, height, app.dpi);
+    if (width <= 0 || height <= 0) {
+        EndPaint(window, &paint);
+        return;
+    }
 
-    // Paint directly to the window DC so ClearType text is not rasterized into
-    // an intermediate bitmap and then scaled by BitBlt or Windows DPI virtualization.
-    if (app.screen == Screen::Menu) drawMenu(dc, width, height, app, layout);
-    else drawGame(dc, width, height, app, layout);
+    const Layout layout = calculateLayout(width, height, app.dpi);
+    HDC memoryDc = CreateCompatibleDC(targetDc);
+    HBITMAP bitmap = memoryDc != nullptr ? CreateCompatibleBitmap(targetDc, width, height) : nullptr;
+    if (memoryDc == nullptr || bitmap == nullptr) {
+        if (bitmap != nullptr) DeleteObject(bitmap);
+        if (memoryDc != nullptr) DeleteDC(memoryDc);
+        paintScene(targetDc, width, height, app, layout);
+        EndPaint(window, &paint);
+        return;
+    }
+
+    HGDIOBJ previousBitmap = SelectObject(memoryDc, bitmap);
+    if (previousBitmap == nullptr || previousBitmap == HGDI_ERROR) {
+        DeleteObject(bitmap);
+        DeleteDC(memoryDc);
+        paintScene(targetDc, width, height, app, layout);
+        EndPaint(window, &paint);
+        return;
+    }
+
+    paintScene(memoryDc, width, height, app, layout);
+    const int dirtyWidth = paint.rcPaint.right - paint.rcPaint.left;
+    const int dirtyHeight = paint.rcPaint.bottom - paint.rcPaint.top;
+    if (dirtyWidth > 0 && dirtyHeight > 0) {
+        BitBlt(targetDc, paint.rcPaint.left, paint.rcPaint.top, dirtyWidth, dirtyHeight,
+               memoryDc, paint.rcPaint.left, paint.rcPaint.top, SRCCOPY);
+    }
+
+    SelectObject(memoryDc, previousBitmap);
+    DeleteObject(bitmap);
+    DeleteDC(memoryDc);
     EndPaint(window, &paint);
 }
 
@@ -533,7 +568,7 @@ bool placeHumanMove(HWND window, AppState& app, const Layout& layout, POINT poin
     const Move move{row, col};
     if (!app.game.board().isEmpty(move)) {
         app.status = L"这个交叉点已有棋子，请选择空位。";
-        InvalidateRect(window, nullptr, FALSE);
+        invalidateRect(window, layout.sidePanel);
         return true;
     }
     saveUndoSnapshot(app);
@@ -549,6 +584,7 @@ bool placeHumanMove(HWND window, AppState& app, const Layout& layout, POINT poin
     } else if (app.pvc) {
         const auto aiMove = app.ai.chooseMove(app.game.board(), Stone::White);
         if (aiMove && app.game.play(*aiMove)) {
+            scrollNotationToLatest(window, app);
             app.lastMove = *aiMove;
             app.status = L"电脑已落子。轮到你了。";
         } else {
@@ -558,7 +594,8 @@ bool placeHumanMove(HWND window, AppState& app, const Layout& layout, POINT poin
     } else {
         app.status = L"落子成功。";
     }
-    InvalidateRect(window, nullptr, FALSE);
+    invalidateRect(window, layout.boardCard);
+    invalidateRect(window, layout.sidePanel);
     return true;
 }
 

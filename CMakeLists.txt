@@ -20,6 +20,16 @@ target_link_libraries(gomoku PRIVATE gomoku_core)
 if(WIN32)
     add_executable(gomoku_gui WIN32 src/win32_ui.cpp)
     target_link_libraries(gomoku_gui PRIVATE gomoku_core user32 gdi32)
+    if(MINGW)
+        execute_process(
+            COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libwinpthread.a
+            OUTPUT_VARIABLE MINGW_STATIC_PTHREAD
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(EXISTS "${MINGW_STATIC_PTHREAD}")
+            target_link_libraries(gomoku_gui PRIVATE "${MINGW_STATIC_PTHREAD}")
+        endif()
+    endif()
     set_target_properties(gomoku_gui PROPERTIES
         OUTPUT_NAME "五子棋"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -33,7 +43,7 @@ if(WIN32)
         target_compile_options(gomoku_gui PRIVATE /W4 /permissive-)
     elseif(MINGW)
         target_compile_options(gomoku_gui PRIVATE -Wall -Wextra -Wpedantic)
-        target_link_options(gomoku_gui PRIVATE -static-libgcc -static-libstdc++)
+        target_link_options(gomoku_gui PRIVATE -static -static-libgcc -static-libstdc++)
     else()
         target_compile_options(gomoku_gui PRIVATE -Wall -Wextra -Wpedantic)
     endif()
