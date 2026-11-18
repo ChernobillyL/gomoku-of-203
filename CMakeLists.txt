@@ -5,7 +5,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(gomoku_core src/game.cpp)
+if(MSVC)
+    add_compile_options(/utf-8)
+    # 静态链接 MSVC 运行库，使 五子棋.exe 不依赖 VC++ Redistributable。
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+add_library(gomoku_core src/game.cpp src/three_player.cpp src/three_player_ai.cpp)
 target_include_directories(gomoku_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 if(MSVC)
@@ -52,7 +58,11 @@ endif()
 add_executable(gomoku_tests tests/test_game.cpp)
 target_link_libraries(gomoku_tests PRIVATE gomoku_core)
 
+add_executable(gomoku_three_player_tests tests/test_three_player.cpp)
+target_link_libraries(gomoku_three_player_tests PRIVATE gomoku_core)
+
 include(CTest)
 if(BUILD_TESTING)
     add_test(NAME gomoku_core_tests COMMAND gomoku_tests)
+    add_test(NAME gomoku_three_player_tests COMMAND gomoku_three_player_tests)
 endif()

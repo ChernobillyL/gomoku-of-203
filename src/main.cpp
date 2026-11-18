@@ -1,5 +1,7 @@
 #include "gomoku/game.hpp"
 #include "gomoku/input.hpp"
+#include "gomoku/three_player.hpp"
+#include "gomoku/three_player_ai.hpp"
 
 #include <iostream>
 #include <string>
@@ -21,6 +23,8 @@ using gomoku::Game;
 using gomoku::Move;
 using gomoku::Result;
 using gomoku::Stone;
+using gomoku::ThreePlayerAi;
+using gomoku::ThreePlayerGame;
 
 enum class ReadStatus { Line, Escape, EndOfInput };
 struct ReadResult {
@@ -109,10 +113,11 @@ ReadResult readLine(const std::string& prompt) {
 std::string stoneSymbol(Stone stone) {
     if (stone == Stone::Black) return "●";
     if (stone == Stone::White) return "○";
+    if (stone == Stone::Red) return "◆";
     return "+";
 }
 
-void drawBoard(const Board& board) {
+void drawBoard(const Board& board, bool threePlayer = false) {
     std::cout << "\n    ";
     for (int col = 1; col <= gomoku::kBoardSize; ++col) {
         if (col < 10) std::cout << ' ';
@@ -127,7 +132,11 @@ void drawBoard(const Board& board) {
         }
         std::cout << '\n';
     }
-    std::cout << "\n符号：黑棋 ●  白棋 ○\n";
+    if (threePlayer) {
+        std::cout << "\n符号：黑棋 ●  白棋 ○  红棋 ◆\n";
+    } else {
+        std::cout << "\n符号：黑棋 ●  白棋 ○\n";
+    }
 }
 
 const char* playerName(Stone stone, bool pvc) {
@@ -135,7 +144,27 @@ const char* playerName(Stone stone, bool pvc) {
     return stone == Stone::Black ? "玩家1（黑棋）" : "玩家2（白棋）";
 }
 
-bool getHumanMove(const Game& game, Move& move) {
+const char* threePlayerName(Stone stone) {
+    switch (stone) {
+        case Stone::Black: return "玩家1（黑棋）";
+        case Stone::White: return "玩家2（白棋）";
+        case Stone::Red: return "玩家3（红棋）";
+        case Stone::Empty: break;
+    }
+    return "玩家";
+}
+
+const char* threePlayerAiName(Stone stone) {
+    switch (stone) {
+        case Stone::Black: return "你（黑棋）";
+        case Stone::White: return "电脑1（白棋）";
+        case Stone::Red: return "电脑2（红棋）";
+        case Stone::Empty: break;
+    }
+    return "玩家";
+}
+
+bool getHumanMove(const Board& board, Move& move) {
     const std::string coordinateRange = "1-" + std::to_string(gomoku::kBoardSize);
     const std::string prompt = "输入行 列（" + coordinateRange + "），如：8 8（按 Esc 退出）：";
     while (true) {
@@ -150,12 +179,16 @@ bool getHumanMove(const Game& game, Move& move) {
             std::cout << "坐标越界，行和列必须在 1 到 15 之间。\n";
             continue;
         }
-        if (!game.board().isEmpty(move)) {
+        if (!board.isEmpty(move)) {
             std::cout << "该位置已有棋子，请选择空位。\n";
             continue;
         }
         return true;
     }
+}
+
+bool getHumanMove(const Game& game, Move& move) {
+    return getHumanMove(game.board(), move);
 }
 
 void announceResult(Result result, bool pvc) {
@@ -171,6 +204,29 @@ void announceResult(Result result, bool pvc) {
             break;
         case Result::Ongoing:
             break;
+    }
+}
+
+void announceThreePlayerResult(const ThreePlayerGame& game) {
+    const auto winner = game.winner();
+    if (winner) {
+        std::cout << threePlayerName(*winner) << "获胜！\n";
+    } else {
+        std::cout << "棋盘下满，平局！\n";
+    }
+}
+
+void announceThreePlayerAiResult(const ThreePlayerGame& game) {
+    const auto winner = game.winner();
+    if (!winner) {
+        std::cout << "棋盘下满，平局！\n";
+        return;
+    }
+    switch (*winner) {
+        case Stone::Black: std::cout << "你赢了！\n"; break;
+        case Stone::White: std::cout << "电脑1（白棋）获胜！\n"; break;
+        case Stone::Red: std::cout << "电脑2（红棋）获胜！\n"; break;
+        case Stone::Empty: break;
     }
 }
 
@@ -207,6 +263,68 @@ bool playGame(bool pvc) {
     return true;
 }
 
+bool playThreePlayerGame() {
+    ThreePlayerGame game(true);
+    std::cout << "\n=== 三人四子棋（同屏） ===\n"
+              << "黑棋先手，三人轮流落子；横、竖、斜任意方向连成四子及以上获胜。\n"
+              << "同屏规则：若其他玩家已有死三或活三，本手不能形成新的活三"
+                 "（直接成四获胜的手除外）。\n";
+    drawBoard(game.board(), true);
+
+    while (!game.finished()) {
+        const Stone turn = game.currentPlayer();
+        std::cout << "轮到：" << threePlayerName(turn) << '\n';
+        Move move;
+        if (!getHumanMove(game.board(), move)) return false;
+        if (game.violatesOpenThreeRule(move)) {
+            std::cout << "其他玩家已有死三或活三，本手不能形成活三。\n";
+            continue;
+        }
+        if (!game.play(move)) {
+            std::cout << "落子失败，请重试。\n";
+            continue;
+        }
+        drawBoard(game.board(), true);
+    }
+
+    announceThreePlayerResult(game);
+    return true;
+}
+
+bool playThreePlayerAiGame() {
+    ThreePlayerGame game;
+    ThreePlayerAi ai;
+    std::cout << "\n=== 三人四子棋 · 人机对战 ===\n"
+              << "你执黑先手，电脑1执白、电脑2执红；两台电脑各自为战。\n";
+    drawBoard(game.board(), true);
+
+    while (!game.finished()) {
+        const Stone turn = game.currentPlayer();
+        if (turn == Stone::Black) {
+            std::cout << "轮到你（黑棋）\n";
+            Move move;
+            if (!getHumanMove(game.board(), move)) return false;
+            if (!game.play(move)) {
+                std::cout << "落子失败，请重试。\n";
+                continue;
+            }
+        } else {
+            std::cout << threePlayerAiName(turn) << "思考中...\n";
+            const auto choice = ai.chooseMove(game.board(), turn);
+            if (!choice || !game.play(*choice)) {
+                std::cerr << "AI 无法生成合法落子，游戏已安全结束。\n";
+                return false;
+            }
+            std::cout << threePlayerAiName(turn) << "落子："
+                      << choice->row + 1 << ' ' << choice->col + 1 << '\n';
+        }
+        drawBoard(game.board(), true);
+    }
+
+    announceThreePlayerAiResult(game);
+    return true;
+}
+
 int readMenuChoice(const std::string& prompt, int minimum, int maximum) {
     while (true) {
         const ReadResult input = readLine(prompt);
@@ -226,6 +344,24 @@ bool runMode(bool pvc) {
     }
 }
 
+bool runThreePlayerMode() {
+    while (true) {
+        if (!playThreePlayerGame()) return false;
+        const int choice = readMenuChoice("本局结束：1 重新开始  2 返回主菜单  3 退出（Esc 退出）：", 1, 3);
+        if (choice == 0 || choice == 3) return false;
+        if (choice == 2) return true;
+    }
+}
+
+bool runThreePlayerAiMode() {
+    while (true) {
+        if (!playThreePlayerAiGame()) return false;
+        const int choice = readMenuChoice("本局结束：1 重新开始  2 返回主菜单  3 退出（Esc 退出）：", 1, 3);
+        if (choice == 0 || choice == 3) return false;
+        if (choice == 2) return true;
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -238,9 +374,19 @@ int main() {
         std::cout << "\n========== 主菜单 ==========\n"
                   << "1：PvP 玩家对战\n"
                   << "2：PvC 人机对战（玩家执黑先手）\n"
-                  << "3：退出游戏\n";
-        const int choice = readMenuChoice("请选择（按 Esc 退出）：", 1, 3);
-        if (choice == 0 || choice == 3) break;
+                  << "3：三人四子棋（同屏，三人轮流）\n"
+                  << "4：三人四子棋（人机，1 人 + 2 电脑）\n"
+                  << "5：退出游戏\n";
+        const int choice = readMenuChoice("请选择（按 Esc 退出）：", 1, 5);
+        if (choice == 0 || choice == 5) break;
+        if (choice == 3) {
+            if (!runThreePlayerMode()) break;
+            continue;
+        }
+        if (choice == 4) {
+            if (!runThreePlayerAiMode()) break;
+            continue;
+        }
         if (!runMode(choice == 2)) break;
     }
     std::cout << "感谢游玩，再见！\n";

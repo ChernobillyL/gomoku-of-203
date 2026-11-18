@@ -10,7 +10,7 @@ namespace gomoku {
 
 constexpr int kBoardSize = 15;
 
-enum class Stone : char { Empty = '.', Black = 'X', White = 'O' };
+enum class Stone : char { Empty = '.', Black = 'X', White = 'O', Red = 'R' };
 enum class Result { Ongoing, BlackWins, WhiteWins, Draw };
 
 struct Move {

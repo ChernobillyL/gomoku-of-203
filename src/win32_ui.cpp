@@ -7,6 +7,8 @@
 #include <windowsx.h>
 
 #include "gomoku/game.hpp"
+#include "gomoku/three_player.hpp"
+#include "gomoku/three_player_ai.hpp"
 
 #include <algorithm>
 #include <array>
@@ -30,10 +32,13 @@ constexpr COLORREF kAccentDark{RGB(35, 151, 123)};
 constexpr COLORREF kBoardWood{RGB(223, 179, 111)};
 constexpr COLORREF kGrid{RGB(94, 68, 43)};
 
+using gomoku::Board;
 using gomoku::Game;
 using gomoku::Move;
 using gomoku::Result;
 using gomoku::Stone;
+using gomoku::ThreePlayerAi;
+using gomoku::ThreePlayerGame;
 
 struct Rect {
     int left;
@@ -49,14 +54,17 @@ struct Rect {
 };
 
 enum class Screen { Menu, Playing, Finished };
-enum class ButtonAction { None, PvP, PvC, Undo, Restart, MainMenu, Exit };
+enum class ButtonAction { None, PvP, PvC, ThreePlayer, ThreePlayerAi, Undo, Restart, MainMenu, Exit };
 
 struct UndoSnapshot {
     Game game;
+    ThreePlayerGame threeGame;
+    bool threePlayer = false;
+    bool threePlayerAi = false;
     std::optional<Move> lastMove;
     int notationScroll = 0;
     std::wstring status;
-    Screen screen;
+    Screen screen = Screen::Playing;
 };
 
 struct Layout {
@@ -65,22 +73,36 @@ struct Layout {
     Rect sidePanel{};
     Rect notationList{};
     std::array<Rect, 4> buttons{};
-    std::array<Rect, 2> menuButtons{};
+    std::array<Rect, 4> menuButtons{};
     Rect menuExit{};
+    Rect menuPanel{};
     UINT dpi = 96;
 };
 
 struct AppState {
     Screen screen = Screen::Menu;
     bool pvc = false;
+    bool threePlayer = false;
+    bool threePlayerAi = false;
     UINT dpi = 96;
     Game game;
+    ThreePlayerGame threeGame;
     gomoku::AiPlayer ai;
+    ThreePlayerAi threeAi;
     std::optional<Move> lastMove;
     std::vector<UndoSnapshot> undoHistory;
     int notationScroll = 0;
     std::wstring status = L"选择一种模式，开始一局五子棋。";
     ButtonAction hovered = ButtonAction::None;
+
+    const Board& board() const { return threePlayer ? threeGame.board() : game.board(); }
+    Stone currentPlayer() const { return threePlayer ? threeGame.currentPlayer() : game.currentPlayer(); }
+    const std::vector<gomoku::MoveRecord>& moveHistory() const {
+        return threePlayer ? threeGame.moveHistory() : game.moveHistory();
+    }
+    bool finished() const {
+        return threePlayer ? threeGame.finished() : game.result() != Result::Ongoing;
+    }
 };
 
 int px(int logicalSize, UINT dpi) {
@@ -171,11 +193,19 @@ Layout calculateLayout(int width, int height, UINT dpi) {
     Layout layout;
     layout.dpi = dpi;
     const int buttonWidth = std::min(px(330, dpi), std::max(px(240, dpi), width / 3));
-    const int buttonHeight = px(62, dpi);
-    const int centerX = width / 2;
-    layout.menuButtons[0] = makeRect(centerX - buttonWidth / 2, height / 2 - px(2, dpi), buttonWidth, buttonHeight);
-    layout.menuButtons[1] = makeRect(centerX - buttonWidth / 2, height / 2 + px(78, dpi), buttonWidth, buttonHeight);
-    layout.menuExit = makeRect(centerX - buttonWidth / 2, height / 2 + px(156, dpi), buttonWidth, buttonHeight);
+    const int buttonHeight = px(50, dpi);
+    const int menuLeft = width / 2 - buttonWidth / 2;
+    const int menuTop = height / 2 - px(68, dpi);
+    const int menuPitch = px(61, dpi);
+    for (int i = 0; i < 4; ++i) {
+        layout.menuButtons[static_cast<std::size_t>(i)] =
+            makeRect(menuLeft, menuTop + i * menuPitch, buttonWidth, buttonHeight);
+    }
+    layout.menuExit = makeRect(menuLeft, menuTop + 4 * menuPitch, buttonWidth, buttonHeight);
+    const int menuPanelTop = height / 2 - px(76, dpi);
+    const int menuPanelBottom = layout.menuExit.bottom + px(18, dpi);
+    layout.menuPanel = makeRect(width / 2 - px(260, dpi), menuPanelTop, px(520, dpi),
+                                menuPanelBottom - menuPanelTop);
 
     const int margin = std::max(px(22, dpi), std::min(width, height) / 30);
     const int headerHeight = px(104, dpi);
@@ -220,16 +250,61 @@ void drawMenu(HDC dc, int width, int height, const AppState& app, const Layout& 
     drawCenteredText(dc, L"经典棋局 · 与朋友或电脑对弈",
                      makeRect(0, height / 2 - px(112, dpi), width, px(36, dpi)), 16, kMuted, dpi);
 
-    drawRoundRect(dc, makeRect(width / 2 - px(260, dpi), height / 2 - px(24, dpi), px(520, dpi), px(330, dpi)),
-                  kPanel, RGB(50, 66, 91), 22, dpi);
+    drawRoundRect(dc, layout.menuPanel, kPanel, RGB(50, 66, 91), 22, dpi);
     drawButton(dc, layout.menuButtons[0], L"双人对战  ·  PvP", ButtonAction::PvP, app.hovered, dpi, true);
     drawButton(dc, layout.menuButtons[1], L"人机对战  ·  PvC", ButtonAction::PvC, app.hovered, dpi);
+    drawButton(dc, layout.menuButtons[2], L"三人四子棋  ·  同屏", ButtonAction::ThreePlayer, app.hovered, dpi);
+    drawButton(dc, layout.menuButtons[3], L"三人四子棋  ·  人机", ButtonAction::ThreePlayerAi, app.hovered, dpi);
     drawButton(dc, layout.menuExit, L"退出游戏", ButtonAction::Exit, app.hovered, dpi, false, true);
-    drawCenteredText(dc, L"15 × 15 棋盘    黑棋先手    五子连线获胜",
+    drawCenteredText(dc, L"15 × 15 棋盘    黑棋先手    四种模式",
                      makeRect(0, height - px(52, dpi), width, px(26, dpi)), 14, kMuted, dpi);
 }
 
+const wchar_t* stoneLabel(Stone stone) {
+    switch (stone) {
+        case Stone::Black: return L"黑";
+        case Stone::White: return L"白";
+        case Stone::Red: return L"红";
+        case Stone::Empty: break;
+    }
+    return L"";
+}
+
+const wchar_t* threePlayerLabel(Stone stone) {
+    switch (stone) {
+        case Stone::Black: return L"玩家1（黑棋）";
+        case Stone::White: return L"玩家2（白棋）";
+        case Stone::Red: return L"玩家3（红棋）";
+        case Stone::Empty: break;
+    }
+    return L"玩家";
+}
+
 std::wstring playerText(const AppState& app) {
+    if (app.threePlayer) {
+        if (app.screen == Screen::Finished) {
+            const auto winner = app.threeGame.winner();
+            if (!winner) return L"平局，再来一局？";
+            if (app.threePlayerAi) {
+                switch (*winner) {
+                    case Stone::Black: return L"你赢了！";
+                    case Stone::White: return L"电脑1（白棋）获胜！";
+                    case Stone::Red: return L"电脑2（红棋）获胜！";
+                    case Stone::Empty: break;
+                }
+            }
+            return std::wstring(threePlayerLabel(*winner)) + L"获胜！";
+        }
+        if (app.threePlayerAi) {
+            switch (app.threeGame.currentPlayer()) {
+                case Stone::Black: return L"轮到你（黑棋）";
+                case Stone::White: return L"电脑1思考中（白棋）";
+                case Stone::Red: return L"电脑2思考中（红棋）";
+                case Stone::Empty: break;
+            }
+        }
+        return std::wstring(L"轮到") + threePlayerLabel(app.threeGame.currentPlayer());
+    }
     if (app.screen == Screen::Finished) {
         switch (app.game.result()) {
             case Result::BlackWins: return app.pvc ? L"你赢了！" : L"黑棋获胜！";
@@ -245,8 +320,13 @@ std::wstring playerText(const AppState& app) {
 void drawHeader(HDC dc, int width, const AppState& app) {
     const UINT dpi = app.dpi;
     drawText(dc, L"五子棋", scaledRect(28, 22, 180, 48, dpi), 27, kText, dpi, DT_LEFT, FW_BOLD);
-    const std::wstring modeTitle = app.pvc ? L"人机对战  /  PvC" : L"双人对战  /  PvP";
+    std::wstring modeTitle = app.pvc ? L"人机对战  /  PvC" : L"双人对战  /  PvP";
+    if (app.threePlayer) modeTitle = app.threePlayerAi ? L"三人四子棋  /  人机" : L"三人四子棋  /  同屏";
     drawText(dc, modeTitle, scaledRect(210, 24, 250, 44, dpi), 16, kMuted, dpi);
+    if (app.threePlayer && !app.threePlayerAi) {
+        drawText(dc, L"同屏规则：他人已有死三/活三时，本手不可再成活三",
+                 scaledRect(210, 70, 620, 24, dpi), 11, kMuted, dpi);
+    }
     drawText(dc, L"ESC  返回菜单", makeRect(width - px(210, dpi), px(24, dpi), px(182, dpi), px(42, dpi)),
              14, kMuted, dpi, DT_RIGHT);
 }
@@ -265,8 +345,15 @@ void drawStone(HDC dc, int x, int y, int radius, Stone stone, bool isLast, UINT 
         DeleteObject(markerBrush);
     }
 
-    const COLORREF stoneColor = stone == Stone::Black ? RGB(25, 31, 41) : RGB(247, 247, 239);
-    const COLORREF outlineColor = stone == Stone::Black ? RGB(8, 12, 18) : RGB(185, 186, 177);
+    COLORREF stoneColor = RGB(247, 247, 239);
+    COLORREF outlineColor = RGB(185, 186, 177);
+    if (stone == Stone::Black) {
+        stoneColor = RGB(25, 31, 41);
+        outlineColor = RGB(8, 12, 18);
+    } else if (stone == Stone::Red) {
+        stoneColor = RGB(198, 64, 64);
+        outlineColor = RGB(122, 32, 36);
+    }
     HBRUSH brush = CreateSolidBrush(stoneColor);
     HPEN pen = CreatePen(PS_SOLID, std::max(1, px(1, dpi)), outlineColor);
     const HGDIOBJ oldBrush = SelectObject(dc, brush);
@@ -327,7 +414,7 @@ void drawBoard(HDC dc, const AppState& app, const Layout& layout) {
     for (int row = 0; row < gomoku::kBoardSize; ++row) {
         for (int col = 0; col < gomoku::kBoardSize; ++col) {
             const Move move{row, col};
-            const Stone stone = app.game.board().at(move);
+            const Stone stone = app.board().at(move);
             if (stone == Stone::Empty) continue;
             const int x = gridPixel(left, col, layout.boardGrid.width());
             const int y = gridPixel(top, row, layout.boardGrid.height());
@@ -368,7 +455,7 @@ void drawSidePanel(HDC dc, const AppState& app, const Layout& layout) {
     const int lineHeight = std::max(1, px(24, dpi));
     const int listTop = layout.notationList.top + px(38, dpi);
     const int visibleLines = notationVisibleLines(layout);
-    const auto& records = app.game.moveHistory();
+    const auto& records = app.moveHistory();
     const int maxScroll = std::max(0, static_cast<int>(records.size()) - visibleLines);
     const int scroll = std::clamp(app.notationScroll, 0, maxScroll);
     if (records.empty()) {
@@ -380,13 +467,16 @@ void drawSidePanel(HDC dc, const AppState& app, const Layout& layout) {
             const int recordIndex = scroll + i;
             if (recordIndex >= static_cast<int>(records.size())) break;
             const auto& record = records[static_cast<std::size_t>(recordIndex)];
-            const wchar_t* stoneName = record.stone == Stone::Black ? L"黑" : L"白";
+            const wchar_t* stoneName = stoneLabel(record.stone);
             const wchar_t column = static_cast<wchar_t>(L'A' + record.move.col);
             std::wstring line = std::to_wstring(recordIndex + 1);
             if (recordIndex + 1 < 10) line = L"0" + line;
             line += L"  ";
             line += stoneName;
-            if (app.pvc && record.stone == Stone::White) line += L"(电脑)";
+            const bool computerMove = app.threePlayer
+                                          ? (app.threePlayerAi && record.stone != Stone::Black)
+                                          : (app.pvc && record.stone == Stone::White);
+            if (computerMove) line += L"(电脑)";
             line += L"  ";
             line += column;
             line += std::to_wstring(record.move.row + 1);
@@ -466,15 +556,41 @@ void paintWindow(HWND window, AppState& app) {
 void startGame(AppState& app, bool pvc) {
     app.screen = Screen::Playing;
     app.pvc = pvc;
+    app.threePlayer = false;
+    app.threePlayerAi = false;
     app.game = Game{};
+    app.threeGame = ThreePlayerGame{};
     app.lastMove.reset();
     app.undoHistory.clear();
     app.notationScroll = 0;
     app.status = pvc ? L"你执黑棋先手。" : L"黑棋先手，请先落子。";
 }
 
+void startThreePlayerGame(AppState& app, bool threePlayerAi) {
+    app.screen = Screen::Playing;
+    app.pvc = false;
+    app.threePlayer = true;
+    app.threePlayerAi = threePlayerAi;
+    app.game = Game{};
+    app.threeGame = ThreePlayerGame(!threePlayerAi);
+    app.lastMove.reset();
+    app.undoHistory.clear();
+    app.notationScroll = 0;
+    app.status = threePlayerAi ? L"你执黑棋先手，两台电脑各自为战。"
+                               : L"玩家1执黑先手，三人轮流落子。";
+}
+
 void saveUndoSnapshot(AppState& app) {
-    app.undoHistory.push_back({app.game, app.lastMove, app.notationScroll, app.status, app.screen});
+    UndoSnapshot snapshot;
+    snapshot.game = app.game;
+    snapshot.threeGame = app.threeGame;
+    snapshot.threePlayer = app.threePlayer;
+    snapshot.threePlayerAi = app.threePlayerAi;
+    snapshot.lastMove = app.lastMove;
+    snapshot.notationScroll = app.notationScroll;
+    snapshot.status = app.status;
+    snapshot.screen = app.screen;
+    app.undoHistory.push_back(std::move(snapshot));
 }
 
 bool undoLastTurn(AppState& app) {
@@ -482,6 +598,9 @@ bool undoLastTurn(AppState& app) {
     UndoSnapshot snapshot = std::move(app.undoHistory.back());
     app.undoHistory.pop_back();
     app.game = std::move(snapshot.game);
+    app.threeGame = std::move(snapshot.threeGame);
+    app.threePlayer = snapshot.threePlayer;
+    app.threePlayerAi = snapshot.threePlayerAi;
     app.lastMove = snapshot.lastMove;
     app.notationScroll = snapshot.notationScroll;
     app.status = std::move(snapshot.status);
@@ -494,6 +613,8 @@ Rect buttonRect(ButtonAction action, const AppState& app, const Layout& layout) 
         switch (action) {
             case ButtonAction::PvP: return layout.menuButtons[0];
             case ButtonAction::PvC: return layout.menuButtons[1];
+            case ButtonAction::ThreePlayer: return layout.menuButtons[2];
+            case ButtonAction::ThreePlayerAi: return layout.menuButtons[3];
             case ButtonAction::Exit: return layout.menuExit;
             default: return {};
         }
@@ -522,6 +643,8 @@ ButtonAction hitTest(const POINT point, const AppState& app, const Layout& layou
     if (app.screen == Screen::Menu) {
         if (layout.menuButtons[0].contains(point)) return ButtonAction::PvP;
         if (layout.menuButtons[1].contains(point)) return ButtonAction::PvC;
+        if (layout.menuButtons[2].contains(point)) return ButtonAction::ThreePlayer;
+        if (layout.menuButtons[3].contains(point)) return ButtonAction::ThreePlayerAi;
         if (layout.menuExit.contains(point)) return ButtonAction::Exit;
         return ButtonAction::None;
     }
@@ -557,16 +680,67 @@ void scrollNotationToLatest(HWND window, AppState& app) {
     GetClientRect(window, &client);
     const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top, app.dpi);
     const int visibleLines = notationVisibleLines(layout);
-    app.notationScroll = std::max(0, static_cast<int>(app.game.moveHistory().size()) - visibleLines);
+    app.notationScroll = std::max(0, static_cast<int>(app.moveHistory().size()) - visibleLines);
 }
 
-bool placeHumanMove(HWND window, AppState& app, const Layout& layout, POINT point) {
-    if (app.screen != Screen::Playing || (app.pvc && app.game.currentPlayer() != Stone::Black)) return false;
+bool placeThreePlayerMove(HWND window, AppState& app, const Layout& layout, POINT point) {
+    if (app.threePlayerAi && app.threeGame.currentPlayer() != Stone::Black) return false;
     const int col = nearestGridIndex(point.x, layout.boardGrid.left, layout.boardGrid.width());
     const int row = nearestGridIndex(point.y, layout.boardGrid.top, layout.boardGrid.height());
     if (row < 0 || col < 0) return false;
     const Move move{row, col};
-    if (!app.game.board().isEmpty(move)) {
+    if (!app.threeGame.board().isEmpty(move)) {
+        app.status = L"这个交叉点已有棋子，请选择空位。";
+        invalidateRect(window, layout.sidePanel);
+        return true;
+    }
+    if (!app.threePlayerAi && app.threeGame.violatesOpenThreeRule(move)) {
+        app.status = L"其他玩家已有死三或活三，本手不能形成活三。";
+        invalidateRect(window, layout.sidePanel);
+        return true;
+    }
+    saveUndoSnapshot(app);
+    if (!app.threeGame.play(move)) {
+        app.undoHistory.pop_back();
+        return true;
+    }
+    app.lastMove = move;
+    if (app.threePlayerAi) {
+        while (!app.threeGame.finished() && app.threeGame.currentPlayer() != Stone::Black) {
+            const Stone aiStone = app.threeGame.currentPlayer();
+            const auto aiMove = app.threeAi.chooseMove(app.threeGame.board(), aiStone);
+            if (aiMove && app.threeGame.play(*aiMove)) {
+                app.lastMove = *aiMove;
+                continue;
+            }
+            const std::vector<Move> fallback = app.threeGame.board().emptyMoves();
+            if (fallback.empty() || !app.threeGame.play(fallback.front())) break;
+            app.lastMove = fallback.front();
+        }
+    }
+    scrollNotationToLatest(window, app);
+    if (app.threeGame.finished()) {
+        app.screen = Screen::Finished;
+        app.status = app.threeGame.winner() ? L"对局结束。" : L"棋盘下满，平局。";
+    } else if (app.threePlayerAi) {
+        app.status = L"电脑已落子，轮到你了。";
+    } else {
+        app.status = L"落子成功。";
+    }
+    invalidateRect(window, layout.boardCard);
+    invalidateRect(window, layout.sidePanel);
+    return true;
+}
+
+bool placeHumanMove(HWND window, AppState& app, const Layout& layout, POINT point) {
+    if (app.screen != Screen::Playing) return false;
+    if (app.threePlayer) return placeThreePlayerMove(window, app, layout, point);
+    if (app.pvc && app.currentPlayer() != Stone::Black) return false;
+    const int col = nearestGridIndex(point.x, layout.boardGrid.left, layout.boardGrid.width());
+    const int row = nearestGridIndex(point.y, layout.boardGrid.top, layout.boardGrid.height());
+    if (row < 0 || col < 0) return false;
+    const Move move{row, col};
+    if (!app.board().isEmpty(move)) {
         app.status = L"这个交叉点已有棋子，请选择空位。";
         invalidateRect(window, layout.sidePanel);
         return true;
@@ -607,6 +781,12 @@ void performAction(HWND window, AppState& app, ButtonAction action, const Layout
         case ButtonAction::PvC:
             startGame(app, true);
             break;
+        case ButtonAction::ThreePlayer:
+            startThreePlayerGame(app, false);
+            break;
+        case ButtonAction::ThreePlayerAi:
+            startThreePlayerGame(app, true);
+            break;
         case ButtonAction::Undo: {
             if (!undoLastTurn(app)) {
                 app.status = L"当前没有可悔的棋。";
@@ -618,11 +798,16 @@ void performAction(HWND window, AppState& app, ButtonAction action, const Layout
             return;
         }
         case ButtonAction::Restart:
-            startGame(app, app.pvc);
+            if (app.threePlayer) startThreePlayerGame(app, app.threePlayerAi);
+            else startGame(app, app.pvc);
             break;
         case ButtonAction::MainMenu:
             app.screen = Screen::Menu;
+            app.pvc = false;
+            app.threePlayer = false;
+            app.threePlayerAi = false;
             app.game = Game{};
+            app.threeGame = ThreePlayerGame{};
             app.lastMove.reset();
             app.undoHistory.clear();
             app.status = L"选择一种模式，开始一局五子棋。";
@@ -702,7 +887,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             const Layout layout = calculateLayout(client.right - client.left, client.bottom - client.top, app->dpi);
             if (app->screen != Screen::Menu && layout.notationList.contains(screenPoint)) {
                 const int visibleLines = notationVisibleLines(layout);
-                const int maxScroll = std::max(0, static_cast<int>(app->game.moveHistory().size()) - visibleLines);
+                const int maxScroll = std::max(0, static_cast<int>(app->moveHistory().size()) - visibleLines);
                 const int wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
                 const int wheelSteps = std::max(1, std::abs(wheelDelta) / WHEEL_DELTA) *
                                        (wheelDelta > 0 ? 1 : -1);
@@ -731,7 +916,11 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 if (app->screen == Screen::Menu) DestroyWindow(window);
                 else {
                     app->screen = Screen::Menu;
+                    app->pvc = false;
+                    app->threePlayer = false;
+                    app->threePlayerAi = false;
                     app->game = Game{};
+                    app->threeGame = ThreePlayerGame{};
                     app->lastMove.reset();
                     app->undoHistory.clear();
                     app->status = L"已返回主菜单。选择模式开始新局。";
