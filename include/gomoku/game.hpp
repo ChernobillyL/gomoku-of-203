@@ -70,9 +70,11 @@ public:
     // Returns no move only when the board has no empty intersections.
     std::optional<Move> chooseMove(const Board& board, Stone aiStone) const;
 
+    // 局部候选点，供搜索排序与剪枝使用。
+    static std::vector<Move> candidates(const Board& board);
+
 private:
     static long long scoreMove(const Board& board, Move move, Stone stone);
-    static std::vector<Move> candidates(const Board& board);
 };
 
 }  // namespace gomoku

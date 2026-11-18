@@ -107,6 +107,11 @@ void testGameWinStopsFurtherMoves() {
 
 void testAiWinsAndBlocks() {
     gomoku::AiPlayer ai;
+    gomoku::Board gapWinning;
+    for (const int col : {3, 4, 6, 7}) gapWinning.place({7, col}, gomoku::Stone::White);
+    const auto gapWin = ai.chooseMove(gapWinning, gomoku::Stone::White);
+    check(gapWin && *gapWin == gomoku::Move{7, 5}, "AI 识别间隔四并选择唯一成五点");
+
     gomoku::Board winning;
     for (int col = 3; col <= 6; ++col) winning.place({7, col}, gomoku::Stone::White);
     const auto winningMove = ai.chooseMove(winning, gomoku::Stone::White);
