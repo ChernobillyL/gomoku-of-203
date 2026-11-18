@@ -27,7 +27,7 @@ int lineLength(const Board& board, Move move, Stone stone, Move direction) {
 
 constexpr long long kWinScore = 1'000'000'000LL;
 constexpr long long kInfinity = std::numeric_limits<long long>::max() / 4;
-constexpr int kSearchDepth = 4;
+constexpr int kSearchDepth = 5;
 constexpr std::size_t kMaxBranching = 8;
 
 // 评分表按“连续五格窗口”统计，允许窗口内有空位，因此活三、冲四等
