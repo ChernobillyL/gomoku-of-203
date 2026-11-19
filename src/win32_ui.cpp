@@ -56,7 +56,9 @@ struct Rect {
 };
 
 enum class Screen { Menu, Playing, Finished };
-enum class ButtonAction { None, PvP, PvC, ThreePlayer, ThreePlayerAi, SixPlayer, SixPlayerAi, Undo, Restart, MainMenu, Exit };
+enum class MenuPage { GameSelection, ModeSelection };
+enum class GameType { Gomoku, ThreePlayer, SixPlayer };
+enum class ButtonAction { None, PvP, PvC, SelectGomoku, SelectThreePlayer, SelectSixPlayer, BackToGames, Undo, Restart, MainMenu, Exit };
 
 struct UndoSnapshot {
     Game game;
@@ -86,6 +88,8 @@ struct Layout {
 
 struct AppState {
     Screen screen = Screen::Menu;
+    MenuPage menuPage = MenuPage::GameSelection;
+    GameType selectedGame = GameType::Gomoku;
     bool pvc = false;
     bool threePlayer = false;
     bool threePlayerAi = false;
@@ -210,25 +214,31 @@ Layout calculateLayout(int width, int height, UINT dpi, int boardSize = gomoku::
     const int buttonWidth = std::min(px(330, dpi), std::max(px(240, dpi), width / 3));
     const int buttonHeight = px(50, dpi);
     const int menuLeft = width / 2 - buttonWidth / 2;
-    const int menuTop = height / 2 - px(200, dpi);
     const int menuPitch = px(58, dpi);
-    for (int i = 0; i < 6; ++i) {
+    const int menuRowsHeight = menuPitch * 3 + buttonHeight;
+    const int menuTop = (height - menuRowsHeight) / 2;
+    for (int i = 0; i < 3; ++i) {
         layout.menuButtons[static_cast<std::size_t>(i)] =
             makeRect(menuLeft, menuTop + i * menuPitch, buttonWidth, buttonHeight);
     }
-    layout.menuExit = makeRect(menuLeft, menuTop + 6 * menuPitch, buttonWidth, buttonHeight);
-    const int menuPanelTop = menuTop - px(18, dpi);
-    const int menuPanelBottom = layout.menuExit.bottom + px(18, dpi);
+    layout.menuButtons[3] = makeRect(menuLeft, menuTop + menuPitch, buttonWidth, buttonHeight);
+    layout.menuButtons[4] = makeRect(menuLeft, menuTop + 2 * menuPitch, buttonWidth, buttonHeight);
+    layout.menuExit = makeRect(menuLeft, menuTop + 3 * menuPitch, buttonWidth, buttonHeight);
+    const int menuPanelTop = menuTop - px(44, dpi);
+    const int menuPanelBottom = layout.menuExit.bottom + px(44, dpi);
     layout.menuPanel = makeRect(width / 2 - px(260, dpi), menuPanelTop, px(520, dpi),
                                 menuPanelBottom - menuPanelTop);
+
 
     const int margin = std::max(px(22, dpi), std::min(width, height) / 30);
     const int headerHeight = px(104, dpi);
     const int availableHeight = std::max(px(300, dpi), height - px(150, dpi));
     const int availableWidth = std::max(px(300, dpi), width - px(390, dpi));
-    const int boardSize = std::max(px(300, dpi), std::min(availableHeight, availableWidth));
-    layout.boardCard = makeRect(margin, headerHeight, boardSize, boardSize);
-    const int labelMargin = std::max(px(36, dpi), boardSize / 16);
+    const int desiredBoardSize = px(36 * (boardSize - 1) + 72, dpi);
+    const int boardPixels = std::max(px(300, dpi),
+                                     std::min({availableHeight, availableWidth, desiredBoardSize}));
+    layout.boardCard = makeRect(margin, headerHeight, boardPixels, boardPixels);
+    const int labelMargin = std::max(px(36, dpi), boardPixels / 16);
     layout.boardGrid = {layout.boardCard.left + labelMargin,
                         layout.boardCard.top + labelMargin,
                         layout.boardCard.right - labelMargin,
@@ -236,7 +246,7 @@ Layout calculateLayout(int width, int height, UINT dpi, int boardSize = gomoku::
 
     const int panelX = layout.boardCard.right + margin;
     const int panelWidth = std::max(px(260, dpi), width - panelX - margin);
-    layout.sidePanel = makeRect(panelX, headerHeight, panelWidth, boardSize);
+    layout.sidePanel = makeRect(panelX, headerHeight, panelWidth, boardPixels);
     const int sideButtonHeight = std::max(px(40, dpi), std::min(px(48, dpi), layout.sidePanel.height() / 11));
     const int gap = px(7, dpi);
     const int buttonY = layout.sidePanel.bottom - sideButtonHeight * 4 - gap * 3 - px(18, dpi);
@@ -257,21 +267,29 @@ void drawBackground(HDC dc, int width, int height, UINT dpi) {
 void drawMenu(HDC dc, int width, int height, const AppState& app, const Layout& layout) {
     const UINT dpi = layout.dpi;
     drawBackground(dc, width, height, dpi);
-    // Center menu headings relative to the window in physical pixels.
     drawCenteredText(dc, L"GOMOKU", makeRect(0, height / 2 - px(350, dpi), width, px(58, dpi)),
                      42, kText, dpi, FW_BOLD);
     drawCenteredText(dc, L"五子棋", makeRect(0, height / 2 - px(290, dpi), width, px(42, dpi)),
                      25, kAccent, dpi, FW_SEMIBOLD);
-    drawCenteredText(dc, L"经典棋局 · 与朋友或电脑对弈",
-                     makeRect(0, height / 2 - px(245, dpi), width, px(36, dpi)), 16, kMuted, dpi);
 
     drawRoundRect(dc, layout.menuPanel, kPanel, RGB(50, 66, 91), 22, dpi);
-    drawButton(dc, layout.menuButtons[0], L"五子棋  ·  PvP", ButtonAction::PvP, app.hovered, dpi, true);
-    drawButton(dc, layout.menuButtons[1], L"五子棋  ·  PvC", ButtonAction::PvC, app.hovered, dpi);
-    drawButton(dc, layout.menuButtons[2], L"三人四子棋  ·  PvP", ButtonAction::ThreePlayer, app.hovered, dpi);
-    drawButton(dc, layout.menuButtons[3], L"三人四子棋  ·  PvC", ButtonAction::ThreePlayerAi, app.hovered, dpi);
-    drawButton(dc, layout.menuButtons[4], L"六子棋  ·  PvP", ButtonAction::SixPlayer, app.hovered, dpi);
-    drawButton(dc, layout.menuButtons[5], L"六子棋  ·  PvC", ButtonAction::SixPlayerAi, app.hovered, dpi);
+    if (app.menuPage == MenuPage::GameSelection) {
+        drawCenteredText(dc, L"第一步 · 选择棋种",
+                         makeRect(0, layout.menuPanel.top + px(8, dpi), width, px(30, dpi)),
+                         17, kMuted, dpi, FW_SEMIBOLD);
+        drawButton(dc, layout.menuButtons[0], L"五子棋", ButtonAction::SelectGomoku, app.hovered, dpi, true);
+        drawButton(dc, layout.menuButtons[1], L"三人四子棋", ButtonAction::SelectThreePlayer, app.hovered, dpi);
+        drawButton(dc, layout.menuButtons[2], L"六子棋", ButtonAction::SelectSixPlayer, app.hovered, dpi);
+    } else {
+        const wchar_t* gameName = app.selectedGame == GameType::Gomoku ? L"五子棋" :
+                                  app.selectedGame == GameType::ThreePlayer ? L"三人四子棋" : L"六子棋";
+        drawCenteredText(dc, std::wstring(L"第二步 · 选择 ") + gameName + L" 模式",
+                         makeRect(0, layout.menuPanel.top + px(8, dpi), width, px(30, dpi)),
+                         16, kMuted, dpi, FW_SEMIBOLD);
+        drawButton(dc, layout.menuButtons[0], L"玩家对战  ·  PvP", ButtonAction::PvP, app.hovered, dpi, true);
+        drawButton(dc, layout.menuButtons[1], L"人机对战  ·  PvC", ButtonAction::PvC, app.hovered, dpi);
+        drawButton(dc, layout.menuButtons[2], L"返回选择棋种", ButtonAction::BackToGames, app.hovered, dpi);
+    }
     drawButton(dc, layout.menuExit, L"退出游戏", ButtonAction::Exit, app.hovered, dpi, false, true);
     drawCenteredText(dc, L"五子棋 / 三人四子棋：15 路    六子棋：19 路",
                      makeRect(0, height - px(52, dpi), width, px(26, dpi)), 14, kMuted, dpi);
@@ -349,7 +367,8 @@ std::wstring playerText(const AppState& app) {
 
 void drawHeader(HDC dc, int width, const AppState& app) {
     const UINT dpi = app.dpi;
-    drawText(dc, app.sixPlayer ? L"六子棋" : L"五子棋", scaledRect(28, 22, 180, 48, dpi), 27, kText, dpi, DT_LEFT, FW_BOLD);
+    const wchar_t* gameTitle = app.sixPlayer ? L"六子棋" : (app.threePlayer ? L"三人四子棋" : L"五子棋");
+    drawText(dc, gameTitle, scaledRect(28, 22, 180, 48, dpi), 27, kText, dpi, DT_LEFT, FW_BOLD);
     std::wstring modeTitle = app.pvc ? L"五子棋  /  PvC" : L"五子棋  /  PvP";
     if (app.threePlayer && !app.sixPlayer) modeTitle = app.threePlayerAi ? L"三人四子棋  /  PvC" : L"三人四子棋  /  PvP";
     if (app.sixPlayer) modeTitle = app.pvc ? L"六子棋  /  PvC" : L"六子棋  /  PvP";
@@ -671,13 +690,19 @@ bool undoLastTurn(AppState& app) {
 
 Rect buttonRect(ButtonAction action, const AppState& app, const Layout& layout) {
     if (app.screen == Screen::Menu) {
+        if (app.menuPage == MenuPage::GameSelection) {
+            switch (action) {
+                case ButtonAction::SelectGomoku: return layout.menuButtons[0];
+                case ButtonAction::SelectThreePlayer: return layout.menuButtons[1];
+                case ButtonAction::SelectSixPlayer: return layout.menuButtons[2];
+                case ButtonAction::Exit: return layout.menuExit;
+                default: return {};
+            }
+        }
         switch (action) {
             case ButtonAction::PvP: return layout.menuButtons[0];
             case ButtonAction::PvC: return layout.menuButtons[1];
-            case ButtonAction::ThreePlayer: return layout.menuButtons[2];
-            case ButtonAction::ThreePlayerAi: return layout.menuButtons[3];
-            case ButtonAction::SixPlayer: return layout.menuButtons[4];
-            case ButtonAction::SixPlayerAi: return layout.menuButtons[5];
+            case ButtonAction::BackToGames: return layout.menuButtons[2];
             case ButtonAction::Exit: return layout.menuExit;
             default: return {};
         }
@@ -704,12 +729,15 @@ void invalidateButton(HWND window, ButtonAction action, const AppState& app, con
 
 ButtonAction hitTest(const POINT point, const AppState& app, const Layout& layout) {
     if (app.screen == Screen::Menu) {
-        if (layout.menuButtons[0].contains(point)) return ButtonAction::PvP;
-        if (layout.menuButtons[1].contains(point)) return ButtonAction::PvC;
-        if (layout.menuButtons[2].contains(point)) return ButtonAction::ThreePlayer;
-        if (layout.menuButtons[3].contains(point)) return ButtonAction::ThreePlayerAi;
-        if (layout.menuButtons[4].contains(point)) return ButtonAction::SixPlayer;
-        if (layout.menuButtons[5].contains(point)) return ButtonAction::SixPlayerAi;
+        if (app.menuPage == MenuPage::GameSelection) {
+            if (layout.menuButtons[0].contains(point)) return ButtonAction::SelectGomoku;
+            if (layout.menuButtons[1].contains(point)) return ButtonAction::SelectThreePlayer;
+            if (layout.menuButtons[2].contains(point)) return ButtonAction::SelectSixPlayer;
+        } else {
+            if (layout.menuButtons[0].contains(point)) return ButtonAction::PvP;
+            if (layout.menuButtons[1].contains(point)) return ButtonAction::PvC;
+            if (layout.menuButtons[2].contains(point)) return ButtonAction::BackToGames;
+        }
         if (layout.menuExit.contains(point)) return ButtonAction::Exit;
         return ButtonAction::None;
     }
@@ -886,23 +914,34 @@ bool placeHumanMove(HWND window, AppState& app, const Layout& layout, POINT poin
 
 void performAction(HWND window, AppState& app, ButtonAction action, const Layout& layout) {
     switch (action) {
+        case ButtonAction::SelectGomoku:
+            app.selectedGame = GameType::Gomoku;
+            app.menuPage = MenuPage::ModeSelection;
+            app.status = L"已选择五子棋，请选择 PvP 或 PvC。";
+            break;
+        case ButtonAction::SelectThreePlayer:
+            app.selectedGame = GameType::ThreePlayer;
+            app.menuPage = MenuPage::ModeSelection;
+            app.status = L"已选择三人四子棋，请选择 PvP 或 PvC。";
+            break;
+        case ButtonAction::SelectSixPlayer:
+            app.selectedGame = GameType::SixPlayer;
+            app.menuPage = MenuPage::ModeSelection;
+            app.status = L"已选择六子棋，请选择 PvP 或 PvC。";
+            break;
+        case ButtonAction::BackToGames:
+            app.menuPage = MenuPage::GameSelection;
+            app.status = L"请先选择游戏种类。";
+            break;
         case ButtonAction::PvP:
-            startGame(app, false);
+            if (app.selectedGame == GameType::Gomoku) startGame(app, false);
+            else if (app.selectedGame == GameType::ThreePlayer) startThreePlayerGame(app, false);
+            else startSixPlayerGame(app, false);
             break;
         case ButtonAction::PvC:
-            startGame(app, true);
-            break;
-        case ButtonAction::ThreePlayer:
-            startThreePlayerGame(app, false);
-            break;
-        case ButtonAction::ThreePlayerAi:
-            startThreePlayerGame(app, true);
-            break;
-        case ButtonAction::SixPlayer:
-            startSixPlayerGame(app, false);
-            break;
-        case ButtonAction::SixPlayerAi:
-            startSixPlayerGame(app, true);
+            if (app.selectedGame == GameType::Gomoku) startGame(app, true);
+            else if (app.selectedGame == GameType::ThreePlayer) startThreePlayerGame(app, true);
+            else startSixPlayerGame(app, true);
             break;
         case ButtonAction::Undo: {
             if (!undoLastTurn(app)) {
@@ -921,6 +960,7 @@ void performAction(HWND window, AppState& app, ButtonAction action, const Layout
             break;
         case ButtonAction::MainMenu:
             app.screen = Screen::Menu;
+            app.menuPage = MenuPage::GameSelection;
             app.pvc = false;
             app.sixPlayer = false;
             app.threePlayer = false;
@@ -1033,9 +1073,17 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         case WM_KEYDOWN:
             if (wParam == VK_ESCAPE) {
-                if (app->screen == Screen::Menu) DestroyWindow(window);
-                else {
+                if (app->screen == Screen::Menu) {
+                    if (app->menuPage == MenuPage::ModeSelection) {
+                        app->menuPage = MenuPage::GameSelection;
+                        app->status = L"请先选择游戏种类。";
+                        InvalidateRect(window, nullptr, FALSE);
+                    } else {
+                        DestroyWindow(window);
+                    }
+                } else {
                     app->screen = Screen::Menu;
+                    app->menuPage = MenuPage::GameSelection;
                     app->pvc = false;
                     app->threePlayer = false;
                     app->threePlayerAi = false;
@@ -1045,7 +1093,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     app->sixGame = gomoku::SixPlayerGame{};
                     app->lastMove.reset();
                     app->undoHistory.clear();
-                    app->status = L"已返回主菜单。选择模式开始新局。";
+                    app->status = L"请先选择游戏种类。";
                     InvalidateRect(window, nullptr, FALSE);
                 }
                 return 0;

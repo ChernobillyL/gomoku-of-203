@@ -98,6 +98,18 @@ void testAiFirstBlackMoveCanWinWithoutPlayingSecondStone() {
     check(game.winner() == gomoku::Stone::Black, "第二子成六后立即获胜");
 }
 
+void testAiBlocksOpponentImmediateSix() {
+    gomoku::SixPlayerAi ai;
+    gomoku::Board threat(gomoku::kSixPlayerBoardSize);
+    // 白棋在 10 行连成五子，左侧被黑棋封住，唯一成六点是 (10, 10)。
+    check(threat.place({10, 4}, gomoku::Stone::Black), "布置封堵黑子");
+    for (int col = 5; col <= 9; ++col) {
+        check(threat.place({10, col}, gomoku::Stone::White), "布置白棋五连");
+    }
+    const auto block = ai.chooseMove(threat, gomoku::Stone::Black, 2);
+    check(block && *block == gomoku::Move{10, 10}, "AI 阻挡对手唯一的成六点");
+}
+
 void testAiFindsImmediateWinAndLegalMove() {
     gomoku::SixPlayerAi ai;
     gomoku::Board winning(gomoku::kSixPlayerBoardSize);
@@ -123,6 +135,7 @@ int main() {
     testSixLineDirections();
     testGameEndsImmediatelyOnSixthStone();
     testAiFirstBlackMoveCanWinWithoutPlayingSecondStone();
+    testAiBlocksOpponentImmediateSix();
     testAiFindsImmediateWinAndLegalMove();
     if (failures != 0) {
         std::cerr << failures << " 项六子棋测试失败。\n";

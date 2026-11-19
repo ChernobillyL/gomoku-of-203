@@ -16,6 +16,8 @@ constexpr long long kWinScore = 1'000'000'000LL;
 constexpr long long kInfinity = std::numeric_limits<long long>::max() / 4;
 constexpr int kSearchDepth = 5;  // 每层表示一颗棋；双子回合由 turnRemaining 保持在同一方。
 constexpr std::size_t kMaxBranching = 7;
+// 节点预算用于兜底，保证复杂中局下界面不会被同步搜索长时间卡住。
+constexpr long long kNodeBudget = 12'000;
 
 long long scoreWindow(const Board& board, Move start, Move direction, Stone stone) {
     int count = 0;
@@ -59,47 +61,86 @@ long long evaluateBoard(const Board& board, Stone aiStone) {
     return evaluateFor(board, aiStone) * 2 - evaluateFor(board, enemy);
 }
 
+// 只统计经过落点的窗口，避免为每个候选点重新扫描整盘（19 路时开销极大）。
+long long localScore(const Board& board, Move move, Stone stone) {
+    Board simulated = board;
+    if (!simulated.place(move, stone)) return -kInfinity;
+    long long score = 0;
+    for (const Move direction : kDirections) {
+        for (int offset = -(kSixPlayerWinLength - 1); offset <= 0; ++offset) {
+            const Move start{move.row + offset * direction.row, move.col + offset * direction.col};
+            const Move end{start.row + (kSixPlayerWinLength - 1) * direction.row,
+                           start.col + (kSixPlayerWinLength - 1) * direction.col};
+            if (simulated.inBounds(start) && simulated.inBounds(end)) {
+                score += scoreWindow(simulated, start, direction, stone);
+            }
+        }
+    }
+    return score;
+}
+
 long long movePriority(const Board& board, Move move, Stone side) {
-    Board own = board;
-    if (!own.place(move, side)) return -kInfinity;
-    const Stone enemy = opponent(side);
-    const long long attackGain = evaluateFor(own, side) - evaluateFor(board, side);
-    const long long defenseGain = evaluateFor(board, enemy) - evaluateFor(own, enemy);
+    const long long attack = localScore(board, move, side);
+    if (attack == -kInfinity) return -kInfinity;
+    const long long defense = localScore(board, move, opponent(side));
     const int center = board.size() / 2;
     const long long centerBias = std::abs(move.row - center) + std::abs(move.col - center);
-    return attackGain * 2 + defenseGain - centerBias;
+    return attack * 2 + defense - centerBias;
+}
+
+// 找出所有一步成六的点，并优先选择靠近棋盘中心的点，保证同一局面的
+// 选择可复现，也避免在多个胜点之间随机落到边缘。
+std::optional<Move> immediateWinner(const Board& board, Stone stone) {
+    std::optional<Move> best;
+    int bestDistance = std::numeric_limits<int>::max();
+    const int center = board.size() / 2;
+    for (const Move move : board.emptyMoves()) {
+        Board after = board;
+        if (!after.place(move, stone) || !formsSixInRow(after, move, stone)) continue;
+        const int distance = std::abs(move.row - center) + std::abs(move.col - center);
+        if (!best || distance < bestDistance) {
+            best = move;
+            bestDistance = distance;
+        }
+    }
+    return best;
 }
 
 std::vector<Move> orderedCandidates(const Board& board, Stone side) {
-    auto moves = AiPlayer::candidates(board);
-    // 立即胜着不受候选宽度限制，避免战术胜点被静态排序裁掉。
-    for (const Move move : board.emptyMoves()) {
+    // 任何成六点都必然紧邻已有棋子，因此只需检查局部候选点，无需扫描全盘。
+    std::vector<Move> wins;
+    std::vector<std::pair<long long, Move>> rest;
+    for (const Move move : AiPlayer::candidates(board)) {
         Board after = board;
-        if (after.place(move, side) && formsSixInRow(after, move, side) &&
-            std::find(moves.begin(), moves.end(), move) == moves.end()) {
-            moves.push_back(move);
+        if (!after.place(move, side)) continue;
+        if (formsSixInRow(after, move, side)) {
+            wins.push_back(move);
+        } else {
+            rest.emplace_back(movePriority(board, move, side), move);
         }
     }
-    std::stable_sort(moves.begin(), moves.end(), [&](Move lhs, Move rhs) {
-        return movePriority(board, lhs, side) > movePriority(board, rhs, side);
-    });
-    if (moves.size() > kMaxBranching) {
-        std::vector<Move> selected(moves.begin(), moves.begin() + static_cast<std::ptrdiff_t>(kMaxBranching));
-        for (const Move move : board.emptyMoves()) {
-            Board after = board;
-            if (after.place(move, side) && formsSixInRow(after, move, side) &&
-                std::find(selected.begin(), selected.end(), move) == selected.end()) {
-                selected.back() = move;
-            }
-        }
-        return selected;
+    std::stable_sort(rest.begin(), rest.end(),
+                     [](const std::pair<long long, Move>& lhs,
+                        const std::pair<long long, Move>& rhs) {
+                         return lhs.first > rhs.first;
+                     });
+
+    // 胜着永远排在前面，避免被候选宽度截断；其余按启发式分数取前若干。
+    std::vector<Move> ordered = wins;
+    for (const auto& entry : rest) {
+        if (ordered.size() >= kMaxBranching) break;
+        ordered.push_back(entry.second);
     }
-    return moves;
+    if (ordered.size() > kMaxBranching) {
+        ordered.resize(kMaxBranching);
+    }
+    return ordered;
 }
 
 long long minimax(const Board& board, Stone side, Stone aiStone, int depth,
                   int turnRemaining, long long alpha, long long beta, Move lastMove,
-                  Stone lastStone) {
+                  Stone lastStone, long long& nodes) {
+    if (++nodes > kNodeBudget) return evaluateBoard(board, aiStone);
     if (lastMove.row >= 0 && formsSixInRow(board, lastMove, lastStone)) {
         const Stone winner = lastStone;
         return winner == aiStone ? kWinScore + depth : -kWinScore - depth;
@@ -118,7 +159,7 @@ long long minimax(const Board& board, Stone side, Stone aiStone, int depth,
         const Stone nextSide = remainingAfter == 0 ? opponent(side) : side;
         const int nextRemaining = remainingAfter == 0 ? 2 : remainingAfter;
         const long long value = minimax(child, nextSide, aiStone, depth - 1, nextRemaining,
-                                        alpha, beta, move, side);
+                                        alpha, beta, move, side, nodes);
         if (maximizing) {
             best = std::max(best, value);
             alpha = std::max(alpha, best);
@@ -138,16 +179,17 @@ std::optional<Move> SixPlayerAi::chooseMove(const Board& board, Stone aiStone,
     if (aiStone == Stone::Empty || board.isFull() || movesRemaining < 1 || movesRemaining > 2)
         return std::nullopt;
 
-    for (const Move move : board.emptyMoves()) {
-        Board after = board;
-        if (after.place(move, aiStone) && formsSixInRow(after, move, aiStone)) return move;
-    }
+    // 自己的直接胜点优先；没有时先堵住对手下一步的成六点。
+    if (const auto win = immediateWinner(board, aiStone)) return win;
+    if (const auto block = immediateWinner(board, opponent(aiStone))) return block;
+
     const auto moves = orderedCandidates(board, aiStone);
     if (moves.empty()) return std::nullopt;
 
     Move bestMove = moves.front();
     long long best = -kInfinity;
     long long alpha = -kInfinity;
+    long long nodes = 0;
     for (const Move move : moves) {
         Board child = board;
         if (!child.place(move, aiStone)) continue;
@@ -155,7 +197,7 @@ std::optional<Move> SixPlayerAi::chooseMove(const Board& board, Stone aiStone,
         const Stone nextSide = remainingAfter == 0 ? opponent(aiStone) : aiStone;
         const int nextRemaining = remainingAfter == 0 ? 2 : remainingAfter;
         const long long value = minimax(child, nextSide, aiStone, kSearchDepth - 1,
-                                        nextRemaining, alpha, kInfinity, move, aiStone);
+                                        nextRemaining, alpha, kInfinity, move, aiStone, nodes);
         if (value > best) {
             best = value;
             bestMove = move;
