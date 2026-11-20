@@ -1,9 +1,11 @@
-#include "gomoku/game.hpp"
-#include "gomoku/input.hpp"
-#include "gomoku/three_player.hpp"
-#include "gomoku/three_player_ai.hpp"
-#include "gomoku/six_player.hpp"
-#include "gomoku/six_player_ai.hpp"
+// 控制台前端：组合三个游戏模块，提供文字棋盘、键盘输入和主菜单。
+// 本文件只负责输入输出与流程控制，规则和 AI 均调用各模块的类。
+#include "gomoku/classic/game.hpp"
+#include "gomoku/core/input.hpp"
+#include "gomoku/three_player/game.hpp"
+#include "gomoku/three_player/ai.hpp"
+#include "gomoku/six_player/game.hpp"
+#include "gomoku/six_player/ai.hpp"
 
 #include <iostream>
 #include <string>
@@ -82,6 +84,10 @@ int readCharacter() {
 }
 #endif
 
+// 参数：prompt 为提示文字。
+// 返回：状态（正常输入/按 Esc/输入结束）及读到的整行文本。
+// 实现：Windows 用 _getch 逐字符读取以捕获 Esc；POSIX 用原始终端模式。
+// 退格只删除缓冲区末尾字符，回车结束输入，避免行编辑库依赖。
 ReadResult readLine(const std::string& prompt) {
 #ifndef _WIN32
     TerminalMode terminalMode;
@@ -121,6 +127,8 @@ std::string stoneSymbol(Stone stone) {
     return "+";
 }
 
+// 参数：board 为待显示棋盘，threePlayer 决定表头是否显示红方。
+// 实现：先输出列号，再逐行输出行号和棋子字符；只做展示，不修改棋盘。
 void drawBoard(const Board& board, bool threePlayer = false) {
     std::cout << "\n    ";
     for (int col = 1; col <= board.size(); ++col) {
@@ -173,6 +181,9 @@ const char* threePlayerAiName(Stone stone) {
     return "玩家";
 }
 
+// 参数：board 为当前棋盘，move 用于输出解析后的 0 基坐标。
+// 返回：读到合法坐标返回 true；按 Esc 或输入结束返回 false。
+// 实现：循环调用 readLine，再用 parseMoveInput 区分格式错误、越界和合法输入。
 bool getHumanMove(const Board& board, Move& move) {
     const std::string coordinateRange = "1-" + std::to_string(board.size());
     const std::string prompt = "输入行 列（" + coordinateRange + "），如：8 8（按 Esc 退出）：";
@@ -418,6 +429,8 @@ bool runThreePlayerAiMode() {
 
 }  // namespace
 
+// 程序入口：循环显示七项主菜单，按选择进入经典五子棋/三人四子棋/六子棋的
+// PvP 或 PvC 流程；返回 false 表示用户按 Esc 要求退出。
 int main() {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);

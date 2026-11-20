@@ -1,4 +1,4 @@
-#include "gomoku/three_player.hpp"
+#include "gomoku/three_player/game.hpp"
 
 #include <array>
 
@@ -84,6 +84,8 @@ bool formsOpenThree(const Board& board, Move move, Stone stone) {
 
 }  // namespace
 
+// 参数：stone 为当前行棋方。
+// 返回：三人局的下一方（黑->白->红->黑）；Empty 视为黑方。
 Stone nextStone(Stone stone) {
     switch (stone) {
         case Stone::Black: return Stone::White;
@@ -94,6 +96,9 @@ Stone nextStone(Stone stone) {
     return Stone::Black;
 }
 
+// 参数：board 为落子后的棋盘，lastMove 为最后落点，stone 为该手颜色。
+// 返回：四个方向中任一方向连续同色棋子达到 4（或更多）时为 true。
+// 实现：只从最后落点向正反两个方向计数，长度 >= kThreePlayerWinLength 即胜。
 bool formsFourInRow(const Board& board, Move lastMove, Stone stone) {
     if (stone == Stone::Empty || !board.inBounds(lastMove) || board.at(lastMove) != stone) {
         return false;
@@ -104,6 +109,10 @@ bool formsFourInRow(const Board& board, Move lastMove, Stone stone) {
     return false;
 }
 
+// 参数：move 为当前方准备落子的坐标。
+// 返回：启用同屏限制且该手会形成新的活三、同时其他玩家已有三棋型时为 true。
+// 实现：先模拟落子；直接成四的获胜手不受限制；否则判断是否形成两端皆空的
+// 连续三子，再扫描另外两方是否已有“三子一空”的棋型。规则为本项目自定义。
 bool ThreePlayerGame::violatesOpenThreeRule(Move move) const {
     if (!restrictOpenThree_ || finished() || !board_.isEmpty(move)) return false;
 
@@ -118,6 +127,9 @@ bool ThreePlayerGame::violatesOpenThreeRule(Move move) const {
     return false;
 }
 
+// 参数：move 为当前方落子坐标。
+// 返回：成功为 true；终局、违反同屏活三限制或落点非法时为 false。
+// 实现：规则检查 -> place -> 记录棋谱 -> 四连判胜 -> 未结束则 nextStone 换手。
 bool ThreePlayerGame::play(Move move) {
     if (finished() || violatesOpenThreeRule(move) || !board_.place(move, currentPlayer_)) {
         return false;

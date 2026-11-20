@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gomoku/three_player.hpp"
+#include "gomoku/three_player/game.hpp"
 
 #include <optional>
 

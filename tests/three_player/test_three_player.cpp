@@ -1,6 +1,6 @@
-#include "gomoku/game.hpp"
-#include "gomoku/three_player.hpp"
-#include "gomoku/three_player_ai.hpp"
+#include "gomoku/core/board.hpp"
+#include "gomoku/three_player/game.hpp"
+#include "gomoku/three_player/ai.hpp"
 
 #include <array>
 #include <cstdlib>

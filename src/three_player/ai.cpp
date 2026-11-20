@@ -1,4 +1,4 @@
-#include "gomoku/three_player_ai.hpp"
+#include "gomoku/three_player/ai.hpp"
 
 #include <algorithm>
 #include <array>
@@ -118,7 +118,7 @@ long long movePriority(const Board& board, Move move, Stone side) {
 
 std::vector<Move> orderedCandidates(const Board& board, Stone side) {
     std::vector<std::pair<long long, Move>> scored;
-    for (const Move move : AiPlayer::candidates(board)) {
+    for (const Move move : candidateMoves(board)) {
         scored.emplace_back(movePriority(board, move, side), move);
     }
     std::stable_sort(scored.begin(), scored.end(),
@@ -159,6 +159,11 @@ Move bestBlockingMove(const Board& board, const std::vector<Move>& blocks, Stone
 
 // 自利式多玩家搜索（max-n）：轮到哪一方，就选择让该方收益最大的分支，
 // 因此两台电脑不会把彼此的胜负当成共同目标。
+// 参数：board 为当前局面；sideToMove 为轮到的一方；depth 为剩余深度；
+//       lastMove 为进入本层前的一手。
+// 返回：黑/白/红三方的收益向量；胜者分量置正大值，其余置负大值。
+// 实现：每层只由 sideToMove 最大化自己的分量（自利式 Max-N），三家轮流展开，
+// 因此不是双人零和 Minimax，也没有 Alpha-Beta 剪枝。
 Scores search(const Board& board, Stone sideToMove, int depth, Move lastMove) {
     if (lastMove.row >= 0) {
         const Stone lastStone = board.at(lastMove);
@@ -194,6 +199,10 @@ Scores search(const Board& board, Stone sideToMove, int depth, Move lastMove) {
 
 }  // namespace
 
+// 参数：board 为当前局面，aiStone 为电脑颜色。
+// 返回：电脑落点；棋盘已满时为空。
+// 实现：优先自己一步成四；否则依次阻挡下一家和再下一家的直接胜点；最后用
+// 自利式 Max-N 搜索（深度 4、每层最多 5 个候选）选择自己收益最大的落点。
 std::optional<Move> ThreePlayerAi::chooseMove(const Board& board, Stone aiStone) const {
     if (aiStone == Stone::Empty || board.isFull()) return std::nullopt;
 

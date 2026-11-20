@@ -1,3 +1,6 @@
+// Win32 图形界面：负责窗口、DPI 缩放、双缓冲绘制、鼠标命中测试与三种棋的
+// 交互分派。游戏规则全部委托给 classic/three_player/six_player 模块，本文件
+// 不实现任何胜负判定。界面状态集中在 AppState，布局集中在 Layout。
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #ifndef _WIN32_WINNT
@@ -6,11 +9,11 @@
 #include <windows.h>
 #include <windowsx.h>
 
-#include "gomoku/game.hpp"
-#include "gomoku/three_player.hpp"
-#include "gomoku/three_player_ai.hpp"
-#include "gomoku/six_player.hpp"
-#include "gomoku/six_player_ai.hpp"
+#include "gomoku/classic/game.hpp"
+#include "gomoku/three_player/game.hpp"
+#include "gomoku/three_player/ai.hpp"
+#include "gomoku/six_player/game.hpp"
+#include "gomoku/six_player/ai.hpp"
 
 #include <algorithm>
 #include <array>
@@ -86,6 +89,9 @@ struct Layout {
     int boardSize = gomoku::kBoardSize;
 };
 
+// 界面的唯一状态对象：保存当前页面、所选棋种、三个对局对象、三个 AI、
+// 悔棋快照和棋谱滚动位置。board()/currentPlayer() 等只读访问器按当前模式
+// 分派到具体对局对象，绘制代码因此不需要重复写三套分支。
 struct AppState {
     Screen screen = Screen::Menu;
     MenuPage menuPage = MenuPage::GameSelection;
@@ -207,6 +213,10 @@ void drawButton(HDC dc, Rect rect, const std::wstring& label, ButtonAction actio
     drawCenteredText(dc, label, rect, 19, textColor, dpi, FW_SEMIBOLD);
 }
 
+// 参数：客户区宽高、当前 DPI、棋盘路数。
+// 返回：按逻辑像素计算、再经 DPI 缩放的各区域矩形。
+// 实现：棋盘和右侧面板按可用空间取最小值，保证 19 路棋盘也不越界；菜单页
+// 以“标题 + 三行按钮 + 退出”的整体高度垂直居中。
 Layout calculateLayout(int width, int height, UINT dpi, int boardSize = gomoku::kBoardSize) {
     Layout layout;
     layout.dpi = dpi;
@@ -563,6 +573,9 @@ void paintScene(HDC dc, int width, int height, const AppState& app, const Layout
     else drawGame(dc, width, height, app, layout);
 }
 
+// 参数：window 为窗口句柄，app 为界面状态。
+// 实现：创建与客户区等大的内存 DC 和位图，先在内存中绘制完整场景，再用
+// BitBlt 一次性拷贝到屏幕，避免逐元素绘制造成的闪烁；最后恢复并删除 GDI 对象。
 void paintWindow(HWND window, AppState& app) {
     PAINTSTRUCT paint{};
     HDC targetDc = BeginPaint(window, &paint);
@@ -912,6 +925,9 @@ bool placeHumanMove(HWND window, AppState& app, const Layout& layout, POINT poin
     return true;
 }
 
+// 参数：window 为窗口句柄，app 为界面状态，action 为按钮动作，layout 为当前布局。
+// 实现：所有按钮只在此处集中分派；选择棋种/模式负责切页与初始化，Undo 恢复
+// 快照，Restart 按当前模式重开，MainMenu 清空状态，Exit 发送关闭消息。
 void performAction(HWND window, AppState& app, ButtonAction action, const Layout& layout) {
     switch (action) {
         case ButtonAction::SelectGomoku:
@@ -981,6 +997,11 @@ void performAction(HWND window, AppState& app, ButtonAction action, const Layout
     InvalidateRect(window, nullptr, FALSE);
 }
 
+// 参数：标准 Win32 窗口过程参数。
+// 返回：已处理消息返回 0，未处理消息交给 DefWindowProc。
+// 实现：WM_PAINT 双缓冲绘制；WM_LBUTTONUP 做按钮/棋盘命中测试；
+// WM_MOUSEMOVE/WM_MOUSELEAVE 只重绘悬停按钮；WM_MOUSEWHEEL 滚动棋谱；
+// WM_KEYDOWN 处理 Esc；WM_DPICHANGED 重新计算布局和窗口尺寸。
 LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     AppState* app = reinterpret_cast<AppState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
@@ -1109,6 +1130,8 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
 
 }  // namespace
 
+// 程序入口：注册窗口类、按 DPI 调整初始窗口大小、创建窗口并进入消息循环。
+// 返回：消息循环结束时 GetMessage 的返回值（通常为 0）。
 int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     const WNDCLASSEXW windowClass{

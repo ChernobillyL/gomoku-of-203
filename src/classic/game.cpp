@@ -1,4 +1,4 @@
-#include "gomoku/game.hpp"
+#include "gomoku/classic/game.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -8,22 +8,6 @@ namespace gomoku {
 namespace {
 
 constexpr std::array<Move, 4> kDirections{{{0, 1}, {1, 0}, {1, 1}, {1, -1}}};
-
-int countDirection(const Board& board, Move origin, Stone stone, Move direction) {
-    int count = 0;
-    Move cursor{origin.row + direction.row, origin.col + direction.col};
-    while (board.inBounds(cursor) && board.at(cursor) == stone) {
-        ++count;
-        cursor.row += direction.row;
-        cursor.col += direction.col;
-    }
-    return count;
-}
-
-int lineLength(const Board& board, Move move, Stone stone, Move direction) {
-    return 1 + countDirection(board, move, stone, direction) +
-           countDirection(board, move, stone, {-direction.row, -direction.col});
-}
 
 constexpr long long kWinScore = 1'000'000'000LL;
 constexpr long long kInfinity = std::numeric_limits<long long>::max() / 4;
@@ -59,6 +43,10 @@ long long scoreWindow(const Board& board, Move start, Move direction, Stone ston
     return patternScore(stones, open);
 }
 
+// 参数：board 为待评估局面，perspective 为评估视角（己方颜色）。
+// 返回：己方窗口总分减去对方窗口总分，分数越高对 perspective 越有利。
+// 实现：枚举四个方向上所有连续五格窗口，对每个窗口分别累计双方棋型，
+// 因此同一局面只需扫描一次即可得到相对分。
 long long evaluateBoard(const Board& board, Stone perspective) {
     long long score = 0;
     for (int row = 0; row < board.size(); ++row) {
@@ -75,6 +63,9 @@ long long evaluateBoard(const Board& board, Stone perspective) {
     return score;
 }
 
+// 参数：board 为落子前局面，move 为候选点，stone 为假设落子的颜色。
+// 返回：该点的局部棋型收益（含中心偏好修正）；非法点返回 long long 最小值。
+// 实现：先复制棋盘模拟落子，再只检查经过 move 的五格窗口，避免全盘重算。
 long long evaluateMove(const Board& board, Move move, Stone stone) {
     Board simulated = board;
     if (!simulated.place(move, stone)) return std::numeric_limits<long long>::min();
@@ -100,7 +91,7 @@ long long movePriority(const Board& board, Move move, Stone side) {
 }
 
 std::vector<Move> orderedCandidates(const Board& board, Stone side) {
-    std::vector<Move> moves = AiPlayer::candidates(board);
+    std::vector<Move> moves = candidateMoves(board);
     std::stable_sort(moves.begin(), moves.end(), [&](Move lhs, Move rhs) {
         return movePriority(board, lhs, side) > movePriority(board, rhs, side);
     });
@@ -108,6 +99,11 @@ std::vector<Move> orderedCandidates(const Board& board, Stone side) {
     return moves;
 }
 
+// 参数：board 为当前局面；sideToMove 为轮到的一方；aiStone 为电脑颜色；
+//       depth 为剩余搜索层数；alpha/beta 为剪枝窗口；lastMove 为进入本层前的一手。
+// 返回：从 aiStone 视角看该局面的估值；己方获胜返回正大值，对方获胜返回负大值。
+// 实现：先检查上一手是否终局，再在 depth==0 时调用 evaluateBoard；否则按启发式
+// 顺序展开候选点，递归搜索并在 beta<=alpha 时剪枝。
 long long minimax(Board board, Stone sideToMove, Stone aiStone, int depth,
                   long long alpha, long long beta, Move lastMove) {
     if (lastMove.row >= 0) {
@@ -143,66 +139,17 @@ long long minimax(Board board, Stone sideToMove, Stone aiStone, int depth,
 
 }  // namespace
 
-Stone opponent(Stone stone) {
-    return stone == Stone::Black ? Stone::White : Stone::Black;
+// 将内部的 Result 枚举转换为统一的“胜者”表示；平局或未结束返回空。
+std::optional<Stone> Game::winner() const {
+    if (result_ == Result::BlackWins) return Stone::Black;
+    if (result_ == Result::WhiteWins) return Stone::White;
+    return std::nullopt;
 }
 
-Board::Board(int size) : size_(size >= 1 && size <= kMaxBoardSize ? size : kBoardSize) {
-    cells_.fill(Stone::Empty);
-}
-
-bool Board::inBounds(Move move) const {
-    return move.row >= 0 && move.row < size_ && move.col >= 0 && move.col < size_;
-}
-
-std::size_t Board::index(Move move) const {
-    return static_cast<std::size_t>(move.row * size_ + move.col);
-}
-
-bool Board::isEmpty(Move move) const {
-    return inBounds(move) && cells_[index(move)] == Stone::Empty;
-}
-
-Stone Board::at(Move move) const {
-    if (!inBounds(move)) return Stone::Empty;
-    return cells_[index(move)];
-}
-
-bool Board::place(Move move, Stone stone) {
-    if (!inBounds(move) || stone == Stone::Empty || !isEmpty(move)) return false;
-    cells_[index(move)] = stone;
-    ++moveCount_;
-    return true;
-}
-
-bool Board::isFull() const {
-    return moveCount_ == size_ * size_;
-}
-
-Result Board::resultAfter(Move lastMove) const {
-    if (!inBounds(lastMove)) return Result::Ongoing;
-    const Stone stone = at(lastMove);
-    if (stone == Stone::Empty) return Result::Ongoing;
-    for (const Move direction : kDirections) {
-        if (lineLength(*this, lastMove, stone, direction) >= 5) {
-            return stone == Stone::Black ? Result::BlackWins : Result::WhiteWins;
-        }
-    }
-    return isFull() ? Result::Draw : Result::Ongoing;
-}
-
-std::vector<Move> Board::emptyMoves() const {
-    std::vector<Move> moves;
-    moves.reserve(static_cast<std::size_t>(size_ * size_ - moveCount_));
-    for (int row = 0; row < size_; ++row) {
-        for (int col = 0; col < size_; ++col) {
-            Move move{row, col};
-            if (isEmpty(move)) moves.push_back(move);
-        }
-    }
-    return moves;
-}
-
+// 参数：move 为当前方要落子的坐标。
+// 返回：成功为 true；对局已结束或落点非法为 false。
+// 实现：Board::place 负责棋盘校验；成功后立即写入棋谱并判胜，只有对局仍在
+// 进行时才切换行棋方，保证终局后 currentPlayer 不再变化。
 bool Game::play(Move move) {
     if (result_ != Result::Ongoing || !board_.place(move, currentPlayer_)) return false;
     moveHistory_.push_back({move, currentPlayer_});
@@ -211,41 +158,17 @@ bool Game::play(Move move) {
     return true;
 }
 
-std::vector<Move> AiPlayer::candidates(const Board& board) {
-    std::vector<Move> moves;
-    if (board.moveCount() == 0) {
-        return {{board.size() / 2, board.size() / 2}};
-    }
-
-    std::array<bool, kMaxBoardSize * kMaxBoardSize> seen{};
-    for (int row = 0; row < board.size(); ++row) {
-        for (int col = 0; col < board.size(); ++col) {
-            const Move occupied{row, col};
-            if (board.at(occupied) == Stone::Empty) continue;
-            for (int dr = -2; dr <= 2; ++dr) {
-                for (int dc = -2; dc <= 2; ++dc) {
-                    const Move candidate{row + dr, col + dc};
-                    if (board.isEmpty(candidate)) {
-                        const std::size_t idx = static_cast<std::size_t>(candidate.row * board.size() + candidate.col);
-                        if (!seen[idx]) {
-                            seen[idx] = true;
-                            moves.push_back(candidate);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    return moves;
-}
-
 long long AiPlayer::scoreMove(const Board& board, Move move, Stone stone) {
     return evaluateMove(board, move, stone);
 }
 
+// 参数：board 为当前局面，aiStone 为电脑执棋颜色。
+// 返回：电脑选定的落点；棋盘已满或无合法候选时返回空。
+// 实现顺序：全盘检查己方一步必胜点 -> 检查并阻挡对方一步胜点 -> 按启发式
+// 排序候选 -> 对每个根节点走法调用 minimax（含 Alpha-Beta 剪枝）取最优。
 std::optional<Move> AiPlayer::chooseMove(const Board& board, Stone aiStone) const {
     if (aiStone == Stone::Empty || board.isFull()) return std::nullopt;
-    const std::vector<Move> moves = candidates(board);
+    const std::vector<Move> moves = candidateMoves(board);
     if (moves.empty()) return std::nullopt;
 
     const Stone enemy = opponent(aiStone);

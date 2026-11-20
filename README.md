@@ -1,8 +1,43 @@
-# C++17 五子棋
+# C++17 多棋种游戏系统
 
-提供 **Win32 原生图形界面**（Windows）和控制台两种入口。五子棋和三人四子棋使用 15×15 棋盘；六子棋使用 19×19 棋盘。
+一个由三个独立游戏模块组合而成的 C++17 课程设计项目：**经典五子棋、三人四子棋、六子棋**。三个模块共用棋盘与对局抽象层，最终组合在同一个 **Win32 原生图形界面**（Windows）和同一个控制台入口中。五子棋和三人四子棋使用 15×15 棋盘；六子棋使用 19×19 棋盘。
 
-PvC 中玩家执黑先手，电脑执白后手。AI 使用六层 Minimax 搜索和 Alpha-Beta 剪枝，并依据进攻/防守启发式排序候选点；局面评分通过四个方向的五格窗口识别连五、活四/眠四、活三/眠三等棋型（含跳棋型），优先完成必胜棋并阻挡对手的直接胜点。无需第三方运行库。
+## 项目结构（三个子系统 + 公共层）
+
+```text
+include/gomoku/
+  core/                 公共层：Stone、Move、MoveRecord、Board、GameBase
+    board.hpp
+    game_base.hpp
+    input.hpp           控制台输入解析
+  classic/              子系统一：经典五子棋
+    game.hpp            Game、AiPlayer
+  three_player/         子系统二：三人四子棋
+    game.hpp            ThreePlayerGame
+    ai.hpp              ThreePlayerAi
+  six_player/           子系统三：六子棋
+    game.hpp            SixPlayerGame
+    ai.hpp              SixPlayerAi
+
+src/
+  core/board.cpp        公共棋盘实现与候选点生成
+  classic/game.cpp      五子棋规则 + Minimax AI
+  three_player/         三人局规则 + Max-N AI
+  six_player/           六子棋规则 + Minimax AI
+  frontend/console.cpp  组合后的控制台入口
+  frontend/win32_ui.cpp 组合后的 Win32 图形界面
+
+tests/
+  classic/              子系统一测试
+  three_player/         子系统二测试
+  six_player/           子系统三测试
+```
+
+三名成员可以各自负责一个 `include/gomoku/<模块>` + `src/<模块>` + `tests/<模块>`；公共层、界面和构建脚本由小组共同维护。`GameBase` 定义三种棋统一的 `board()`、`currentPlayer()`、`finished()`、`winner()`、`moveHistory()`、`play()` 接口，三个对局类分别公有继承并实现，界面只依赖抽象基类。
+
+CMake 目标与模块一一对应：`gomoku_common`、`gomoku_classic`、`gomoku_three_player`、`gomoku_six_player`；可执行目标 `gomoku`（控制台）和 `gomoku_gui`（Win32 界面）链接三个模块。
+
+PvC 中玩家执黑先手，电脑执白后手。经典五子棋 AI 使用六层 Minimax 搜索和 Alpha-Beta 剪枝，并依据进攻/防守启发式排序候选点；局面评分通过四个方向的五格窗口识别连五、活四/眠四、活三/眠三等棋型（含跳棋型），优先完成必胜棋并阻挡对手的直接胜点。三人四子棋使用自利式 Max-N，六子棋使用带节点预算的五层 Minimax，详见下文。无需第三方运行库。
 
 ## 图形界面（Windows）
 
@@ -15,8 +50,8 @@ PvC 中玩家执黑先手，电脑执白后手。AI 使用六层 Minimax 搜索�
 首次生成或重新生成程序时，开发者可在项目根目录运行以下构建命令：
 
 ```powershell
-cmake -S . -B build
-cmake --build build --config Release
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j 8
 ```
 
 生成后双击项目根目录的 `五子棋.exe` 即可游玩。控制台版仍单独保留为 `gomoku.exe`。
@@ -39,14 +74,19 @@ cmake --build build --config Release
 原控制台目标 `gomoku` 保留，支持 Windows 和 POSIX 终端：
 
 ```bash
-g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Iinclude src/main.cpp src/game.cpp src/three_player.cpp src/three_player_ai.cpp src/six_player.cpp src/six_player_ai.cpp -o gomoku
+g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Iinclude \
+    src/core/board.cpp \
+    src/classic/game.cpp \
+    src/three_player/game.cpp src/three_player/ai.cpp \
+    src/six_player/game.cpp src/six_player/ai.cpp \
+    src/frontend/console.cpp -o gomoku
 ./gomoku
 ```
 
 Windows MinGW：
 
 ```powershell
-g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Iinclude src/main.cpp src/game.cpp src/three_player.cpp src/three_player_ai.cpp src/six_player.cpp src/six_player_ai.cpp -o gomoku.exe
+g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Iinclude src/core/board.cpp src/classic/game.cpp src/three_player/game.cpp src/three_player/ai.cpp src/six_player/game.cpp src/six_player/ai.cpp src/frontend/console.cpp -o gomoku.exe
 .\gomoku.exe
 ```
 
@@ -55,12 +95,27 @@ g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Iinclude src/main.cpp src/game.cpp 
 ## 构建与运行测试
 
 ```bash
-cmake -S . -B build
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j 8
+ctest --test-dir build --output-on-failure
 ```
 
-核心测试不依赖第三方框架，覆盖五子棋落子、胜负与 AI 行为。三人四子棋另有独立测试，覆盖三人轮换、四方向四连、同屏规则与 AI 必胜/阻挡。六子棋测试覆盖开局单子、随后双方双子回合、四方向六连胜、非法落子和 AI 落点。非 Windows 平台不会创建 Win32 GUI 目标，控制台版和核心测试仍可照常构建。
+三个测试目标分别链接自己的游戏模块，不依赖另外两个模块：
+
+- `gomoku_classic_tests` → `classic_tests`：棋盘落子、四方向五连、输入解析、回合/历史、胜后禁止落子、AI 必胜/必防/确定性。
+- `gomoku_three_player_tests` → `three_player_tests`：三人轮换、四方向四连、满盘平局、同屏活三规则、AI 必胜/阻挡/轮转。
+- `gomoku_six_player_tests` → `six_player_tests`：单子开局、双子回合、四方向六连、即时终局、AI 必胜/阻挡。
+
+测试不依赖第三方框架。非 Windows 平台不会创建 Win32 GUI 目标，控制台版和三个模块测试仍可照常构建。
+
+### 图形界面输出目录
+
+GUI 默认输出到项目根目录的 `五子棋.exe`。如果该文件正在运行、需要保留旧版本，或只想做构建验证，可以指定其他输出目录：
+
+```powershell
+cmake -S . -B build-check -G Ninja -DCMAKE_BUILD_TYPE=Release -DGOMOKU_GUI_OUTPUT_DIR="$PWD/build-check/out"
+cmake --build build-check --target gomoku_gui
+```
 
 ## 三人四子棋
 

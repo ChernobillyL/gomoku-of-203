@@ -1,5 +1,5 @@
-#include "gomoku/game.hpp"
-#include "gomoku/input.hpp"
+#include "gomoku/classic/game.hpp"
+#include "gomoku/core/input.hpp"
 
 #include <cstdlib>
 #include <iostream>

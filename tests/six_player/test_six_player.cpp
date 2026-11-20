@@ -1,5 +1,5 @@
-#include "gomoku/six_player.hpp"
-#include "gomoku/six_player_ai.hpp"
+#include "gomoku/six_player/game.hpp"
+#include "gomoku/six_player/ai.hpp"
 
 #include <cstdlib>
 #include <iostream>
