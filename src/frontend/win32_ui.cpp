@@ -740,6 +740,21 @@ void invalidateButton(HWND window, ButtonAction action, const AppState& app, con
     if (action != ButtonAction::None) invalidateRect(window, buttonRect(action, app, layout));
 }
 
+// 玩家落子后、AI 开始计算前，强制把当前棋盘和“电脑思考中”状态刷到屏幕。
+// 否则 chooseMove 的同步搜索会阻塞消息循环，玩家会看到两手棋同时出现。
+void beginAiTurn(HWND window, AppState& app, const Layout& layout) {
+    app.status = L"电脑思考中，请稍候…";
+    invalidateRect(window, layout.boardCard);
+    invalidateRect(window, layout.sidePanel);
+    UpdateWindow(window);
+    // IDC_WAIT / IDC_ARROW 是资源整数宏；显式用 MAKEINTRESOURCEW 避免字符集不匹配。
+    SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32514)));
+}
+
+void endAiTurn() {
+    SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)));
+}
+
 ButtonAction hitTest(const POINT point, const AppState& app, const Layout& layout) {
     if (app.screen == Screen::Menu) {
         if (app.menuPage == MenuPage::GameSelection) {
@@ -813,6 +828,7 @@ bool placeThreePlayerMove(HWND window, AppState& app, const Layout& layout, POIN
     }
     app.lastMove = move;
     if (app.threePlayerAi) {
+        beginAiTurn(window, app, layout);
         while (!app.threeGame.finished() && app.threeGame.currentPlayer() != Stone::Black) {
             const Stone aiStone = app.threeGame.currentPlayer();
             const auto aiMove = app.threeAi.chooseMove(app.threeGame.board(), aiStone);
@@ -824,6 +840,7 @@ bool placeThreePlayerMove(HWND window, AppState& app, const Layout& layout, POIN
             if (fallback.empty() || !app.threeGame.play(fallback.front())) break;
             app.lastMove = fallback.front();
         }
+        endAiTurn();
     }
     scrollNotationToLatest(window, app);
     if (app.threeGame.finished()) {
@@ -860,6 +877,7 @@ bool placeSixPlayerMove(HWND window, AppState& app, const Layout& layout, POINT 
     }
     app.lastMove = move;
     if (app.pvc && !app.sixGame.finished() && app.sixGame.currentPlayer() == Stone::White) {
+        beginAiTurn(window, app, layout);
         const int aiMoves = app.sixGame.movesRemaining();
         for (int i = 0; i < aiMoves && !app.sixGame.finished(); ++i) {
             const auto aiMove = app.sixAi.chooseMove(app.sixGame.board(), Stone::White,
@@ -870,6 +888,7 @@ bool placeSixPlayerMove(HWND window, AppState& app, const Layout& layout, POINT 
             }
             app.lastMove = *aiMove;
         }
+        endAiTurn();
     }
     scrollNotationToLatest(window, app);
     if (app.sixGame.finished()) {
@@ -908,6 +927,8 @@ bool placeHumanMove(HWND window, AppState& app, const Layout& layout, POINT poin
     if (app.game.result() != Result::Ongoing) {
         app.screen = Screen::Finished;
     } else if (app.pvc) {
+        // 先让玩家这一手显示出来，再进入可能持续数百毫秒到数秒的 AI 搜索。
+        beginAiTurn(window, app, layout);
         const auto aiMove = app.ai.chooseMove(app.game.board(), Stone::White);
         if (aiMove && app.game.play(*aiMove)) {
             scrollNotationToLatest(window, app);
@@ -917,6 +938,7 @@ bool placeHumanMove(HWND window, AppState& app, const Layout& layout, POINT poin
             app.status = L"电脑没有可用落点。";
         }
         if (app.game.result() != Result::Ongoing) app.screen = Screen::Finished;
+        endAiTurn();
     } else {
         app.status = L"落子成功。";
     }
